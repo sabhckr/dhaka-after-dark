@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/raw/
+data/tmp/
+.nitro/
+.output/
+.vercel/
+.env
+.env.*
+*.log
+.grok/
+AGENTS.md

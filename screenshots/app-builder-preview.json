@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "DHAKA: AFTER DARK",
+      "hasCanvas": true,
+      "bodyTextLen": 1807,
+      "bodyTextHash": "f157596823bfb1d0b7d8914494c04ddf8705e13cb8346f38207e0128e0686b23",
+      "bodyTextPrefix": "DHAKA AFTER DARK Real streets and footprints. Shop names are Ope",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "DHAKA: AFTER DARK",
+      "hasCanvas": true,
+      "bodyTextLen": 1747,
+      "bodyTextHash": "c6eb474a287b6dba08b6e61d810dba29d0c7d701ab98b0b3c4d4d1f41cece328",
+      "bodyTextPrefix": "DHAKA AFTER DARK Real streets and footprints. Shop names are Ope",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}

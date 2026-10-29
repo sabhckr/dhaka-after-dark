@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #100814;
+  --color-surface: #1a1024;
+  --color-fg: #f6efe6;
+  --color-muted: #c2aebc;
+  --color-accent: #ff4d8d;
+  --color-line: #3a2844;
+  --font-display: "Barlow Condensed", ui-sans-serif, sans-serif;
+  --font-sans: "Figtree", ui-sans-serif, sans-serif;
+  --radius: 1rem;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  select {
+    cursor: pointer;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+  }
+}

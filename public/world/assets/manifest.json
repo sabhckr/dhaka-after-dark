@@ -1,0 +1,46 @@
+{
+  "v": 2,
+  "kind": "procedural-materials-and-signage",
+  "textures": "Generated in the browser from canvas in src/viewer/proc-tex.ts and src/viewer/posters.ts. No photo tiles, no Google imagery, no third-party texture packs.",
+  "maps": {
+    "baseColor": "sRGB canvas textures, shared across chunks",
+    "roughness": "linear canvas, multiplied by the active light preset",
+    "normal": "derivative tangents (no per-vertex tangent attribute). Scaled down in the low quality mode.",
+    "ambientOcclusion": "Baked into the base color. Chunk meshes have no uv2, so a separate aoMap is not bound.",
+    "metalness": "Scalar only, on tin, wet asphalt, and water. No metalness textures."
+  },
+  "facades": [
+    "stained plaster apartments",
+    "faded paint",
+    "commercial glass",
+    "exposed brick",
+    "corrugated tin"
+  ],
+  "uv": "Walls keep their footprint. The bottom 3.2 m uses the shopfront band. Floors above repeat one window tile, at most 8 slices.",
+  "font": {
+    "name": "Noto Sans Bengali",
+    "license": "SIL Open Font License 1.1",
+    "files": [
+      "/fonts/noto-sans-bengali-bengali-700-normal.woff",
+      "/fonts/noto-sans-bengali-bengali-900-normal.woff",
+      "/fonts/noto-sans-bengali-latin-700-normal.woff"
+    ],
+    "notice": "/fonts/OFL.txt",
+    "source": "@fontsource/noto-sans-bengali@5.3.0"
+  },
+  "shops": {
+    "path": "/world/signs/",
+    "index": "/world/signs/index.json",
+    "source": "OpenStreetMap",
+    "license": "ODbL-1.0",
+    "attribution": "© OpenStreetMap contributors",
+    "verification": "osm-tag-only",
+    "retrieved": "2026-10-29",
+    "pbf": "Geofabrik Bangladesh extract dated 2026-10-28",
+    "regenerate": "node --max-old-space-size=2048 --experimental-strip-types scripts/geo/extract-shops.ts",
+    "note": "Each record stores the OSM element id and type. Dataset timestamp and verification status live on the index, not copied onto every row. Names are name:bn, then name, then name:en. Nothing is translated. Facade side is approximate."
+  },
+  "fictional": "Meme, movie, and political posters are original copy in src/viewer/copy.ts. They are not OSM names and are not placed on a building that already carries a real shop sign.",
+  "looks": ["sunset", "dusk", "neon", "wet", "day"],
+  "quality": "High keeps cables, rain, and full normal scale. Low drops cable strands and rain, reduces normal scale and anisotropy, and places fewer posters and shop signs on chunks loaded after the switch."
+}

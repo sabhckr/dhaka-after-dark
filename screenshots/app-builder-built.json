@@ -1,0 +1,41 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "DHAKA: AFTER DARK",
+      "hasCanvas": true,
+      "bodyTextLen": 1737,
+      "bodyTextHash": "cf0e23873d48baeb35177b90441610c4bb97ab22e9690ed453a93377c82c1e70",
+      "bodyTextPrefix": "DHAKA AFTER DARK Real streets and footprints. Shop names are Ope",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "DHAKA: AFTER DARK",
+      "hasCanvas": true,
+      "bodyTextLen": 1747,
+      "bodyTextHash": "c6eb474a287b6dba08b6e61d810dba29d0c7d701ab98b0b3c4d4d1f41cece328",
+      "bodyTextPrefix": "DHAKA AFTER DARK Real streets and footprints. Shop names are Ope",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": true,
+  "baselineReasons": [
+    "desktop: body text changed (1404 -> 1737 chars, hash mismatch)",
+    "mobile: body text changed (1414 -> 1747 chars, hash mismatch)"
+  ]
+}
