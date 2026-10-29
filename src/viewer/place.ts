@@ -102,13 +102,27 @@ export function buildingCrown(id: number, h: number): BuildingCrown {
   const parapet = h >= 5 && !tin && hash32(id) % 5 !== 4;
   return {
     parapet,
-    parapetH: parapet ? (h >= 14 ? 0.85 : 0.5) : 0,
+    parapetH: parapet ? (h >= 14 ? 1.15 : 0.9) : 0,
     tank: h >= 6 && !tin && hash32(id + 11) % 5 < 3,
     stair: h >= 14 && !tin && hash32(id + 19) % 3 === 0,
     chajja: h >= 4 && hash32(id + 3) % 3 !== 2,
     tinRidge: tin && h <= 9,
   };
 }
+
+/**
+ * Podium plus a smaller upper mass. Not a surveyed setback.
+ * Tin sheds and courtyard footprints stay a single extrusion.
+ * About one in five ids also stays a full box so the block is not uniform.
+ */
+export function wantsSetback(id: number, h: number, holes: number): boolean {
+  if (h < 6.4 || holes > 0) return false;
+  if (facadeSlot(id, h) === 4) return false;
+  return hash32(id + 29) % 5 !== 4;
+}
+
+/** Largest footprints win when a chunk is over this cap. */
+export const SETBACK_CAP = 700;
 
 const PLASTER: [number, number, number][] = [
   [0.86, 0.8, 0.7],

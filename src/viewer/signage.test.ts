@@ -16,6 +16,7 @@ import {
   posterPose,
   rankShops,
   roadWantsMarks,
+  wantsSetback,
 } from "./place.ts";
 
 function lambertLib(): SurfaceLibrary {
@@ -209,6 +210,40 @@ test("roof extras stay on the footprint and do not change its plate", () => {
   const tin = chunk.buildings[1];
   assert.equal(buildingCrown(tin.id, tin.h).tinRidge, facadeSlot(tin.id, tin.h) === 4);
   assert.deepEqual(buildingCrown(140, 18), buildingCrown(140, 18));
+  releaseChunkResources(built);
+});
+
+test("upper floors step inside the footprint and the podium stays put", () => {
+  let id = 0;
+  for (let n = 1; n < 800; n++) {
+    if (wantsSetback(n, 12, 0)) {
+      id = n;
+      break;
+    }
+  }
+  assert.ok(id > 0);
+  const chunk = fixture();
+  chunk.buildings = [{ id, h: 12, hs: "measured", outer: [0, 0, 20, 0, 20, 14, 0, 14] }];
+  const built = buildChunkObjects(chunk, lambertLib());
+  const pts: number[] = [];
+  let setbacks = 0;
+  built.group.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    const attr = mesh.geometry?.getAttribute?.("position");
+    if (!attr) return;
+    if (mesh.userData.setbackBuildings) setbacks = mesh.userData.setbackBuildings as number;
+    for (let i = 0; i < attr.count; i++) pts.push(attr.getX(i), attr.getY(i), attr.getZ(i));
+  });
+  const has = (x: number, y: number, z: number) =>
+    pts.some((v, i) => i % 3 === 0 && Math.abs(pts[i] - x) < 1e-3 && Math.abs(pts[i + 1] - y) < 1e-3 && Math.abs(pts[i + 2] - z) < 1e-3);
+  assert.equal(setbacks, 1);
+  assert.equal(has(0, 0, 0), true);
+  assert.equal(has(0, 3.2, 0), true);
+  assert.equal(has(0, 12, 0), false);
+  const roofCorner = pts.some(
+    (v, i) => i % 3 === 0 && Math.abs(pts[i + 1] - 12) < 1e-3 && pts[i] > 0.8 && pts[i] < 19.2 && pts[i + 2] > 0.8 && pts[i + 2] < 13.2,
+  );
+  assert.equal(roofCorner, true);
   releaseChunkResources(built);
 });
 

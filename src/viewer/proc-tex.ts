@@ -316,23 +316,23 @@ function paintFloorBand(
   kind: number,
 ) {
   const w = ctx.canvas.width;
-  const bays = kind === 4 ? 3 : 4;
+  const bays = kind === 4 ? 2 : 2;
   const bw = w / bays;
   const hh = Math.max(8, y1 - y0);
-  ctx.fillStyle = "rgba(36, 30, 26, 0.4)";
-  ctx.fillRect(0, y1 - 12, w, 8);
-  hx.fillStyle = "#b4b4b4";
-  hx.fillRect(0, y1 - 14, w, 5);
+  ctx.fillStyle = "rgba(28, 24, 20, 0.72)";
+  ctx.fillRect(0, y1 - 16, w, 12);
+  hx.fillStyle = "#c8c8c8";
+  hx.fillRect(0, y1 - 16, w, 6);
   for (let b = 0; b < bays; b++) {
     const x0 = b * bw;
     const lit = (b * 5 + kind * 3) % 4 !== 0;
-    const wx = x0 + bw * 0.22;
-    const wy = y0 + hh * 0.16;
-    const ww = bw * 0.52;
-    const wh = hh * 0.48;
-    ctx.fillStyle = "#161210";
-    ctx.fillRect(wx - 4, wy - 4, ww + 8, wh + 8);
-    ctx.fillStyle = lit ? "#8ea4b4" : "#1a2228";
+    const wx = x0 + bw * 0.16;
+    const wy = y0 + hh * 0.1;
+    const ww = bw * 0.66;
+    const wh = hh * 0.64;
+    ctx.fillStyle = "#100e0c";
+    ctx.fillRect(wx - 6, wy - 6, ww + 12, wh + 12);
+    ctx.fillStyle = lit ? "#6f8ea3" : "#12181c";
     ctx.fillRect(wx, wy, ww, wh);
     if (lit && (b + kind) % 3 === 0) {
       ex.fillStyle = "#e7c49a";
@@ -430,7 +430,7 @@ export function makeFacade(kind: number): { color: HTMLCanvasElement; emit: HTML
   const shopCanvasTop = Math.floor(h * 0.7);
   paintFloorBand(ctx, ex, rx, hx, 8, shopCanvasTop - 8, kind);
   paintShopBand(ctx, ex, rx, hx, shopCanvasTop, h - 2, kind);
-  stain(ctx, w, h, kind === 4 ? 0.34 : 0.48);
+  stain(ctx, w, h, kind === 4 ? 0.22 : 0.2);
   if (kind < 3) {
     ctx.strokeStyle = "rgba(28, 36, 30, 0.28)";
     ctx.lineWidth = 3;

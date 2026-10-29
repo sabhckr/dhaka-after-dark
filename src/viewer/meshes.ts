@@ -5,7 +5,7 @@ import { isFootSpan, solidsFromChunk } from "./solids.ts";
 import { buildFootBridgeMeshes } from "./footbridge.ts";
 import { kindFromCat, notableById } from "./landmarks.ts";
 import { filletGentleBends, miterOutline, prepareVisualRoads } from "./roads.ts";
-import { buildingCrown, facadeSlot, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks } from "./place.ts";
+import { buildingCrown, facadeSlot, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks, SETBACK_CAP, wantsSetback } from "./place.ts";
 
 export const BLOCK = {
   ground: 0x141816,
@@ -218,13 +218,22 @@ function pushMarker(s: Surface, x: number, z: number, h: number, kind: string) {
 }
 
 /** Shop band stays at the bottom. Upper floors repeat the window tile, capped so towers stay cheap. */
-function addWalls(ring: number[], h: number, s: Surface, label: string, tint: Tint, uShift = 0) {
+function addWalls(
+  ring: number[],
+  y0: number,
+  y1: number,
+  s: Surface,
+  label: string,
+  tint: Tint,
+  uShift = 0,
+  shop = true,
+) {
   const n = ring.length / 2;
-  if (n < 2 || h <= 0.2) return;
+  if (n < 2 || y1 <= y0 + 0.15) return;
   const startTri = s.idx.length / 3;
   const tileX = 10.4;
   let dist = 0;
-  const shopTop = Math.min(h, SHOP_H);
+  const shopTop = shop ? Math.min(y1, y0 + SHOP_H) : y0;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     const ax = ring[i * 2];
@@ -235,20 +244,61 @@ function addWalls(ring: number[], h: number, s: Surface, label: string, tint: Ti
     const u0 = dist / tileX + uShift;
     const u1 = (dist + len) / tileX + uShift;
     dist += len;
-    const vShop = SHOP_V * (shopTop / SHOP_H);
-    pushWallQuad(s, ax, az, bx, bz, 0, shopTop, u0, u1, 0, vShop, tint);
-    if (h <= shopTop + 0.15) continue;
-    const upper = h - shopTop;
+    if (shop && shopTop > y0 + 0.05) {
+      const vShop = SHOP_V * ((shopTop - y0) / SHOP_H);
+      pushWallQuad(s, ax, az, bx, bz, y0, shopTop, u0, u1, 0, vShop, tint);
+    }
+    if (y1 <= shopTop + 0.12) continue;
+    const upper = y1 - shopTop;
     const slices = Math.min(MAX_FLOOR_SLICES, Math.max(1, Math.round(upper / 3.2)));
     const sliceH = upper / slices;
     for (let sli = 0; sli < slices; sli++) {
-      const y0 = shopTop + sli * sliceH;
-      const y1 = sli === slices - 1 ? h : shopTop + (sli + 1) * sliceH;
-      pushWallQuad(s, ax, az, bx, bz, y0, y1, u0, u1, SHOP_V, 1, tint);
+      const a = shopTop + sli * sliceH;
+      const b = sli === slices - 1 ? y1 : shopTop + (sli + 1) * sliceH;
+      pushWallQuad(s, ax, az, bx, bz, a, b, u0, u1, SHOP_V, 1, tint);
     }
   }
   const count = s.idx.length / 3 - startTri;
   if (count > 0) s.ranges.push({ start: startTri, count, label });
+}
+
+/** Pull every corner toward the centroid. Rejects rings that would leave the footprint. */
+function insetRingMeters(ring: number[], metres: number): number[] | null {
+  const c = ringCentroid(ring);
+  if (!c || metres < 0.4) return null;
+  const out: number[] = [];
+  const n = ring.length / 2;
+  for (let i = 0; i < n; i++) {
+    const dx = ring[i * 2] - c.x;
+    const dz = ring[i * 2 + 1] - c.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < metres + 1.4) return null;
+    const k = (dist - metres) / dist;
+    out.push(c.x + dx * k, c.z + dz * k);
+  }
+  for (let i = 0; i < n; i++) {
+    if (!pointInOuter(out[i * 2], out[i * 2 + 1], ring)) return null;
+  }
+  return out;
+}
+
+/** Ledge between the podium footprint and the smaller upper mass. */
+function addTerrace(outer: number[], inner: number[], y: number, s: Surface, label: string, tint: Tint): number {
+  const n = outer.length / 2;
+  if (inner.length / 2 !== n || n < 3) return 0;
+  const startTri = s.idx.length / 3;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const base = s.pos.length / 3;
+    pushV(s, outer[i * 2], y, outer[i * 2 + 1], 0, 0, tint);
+    pushV(s, outer[j * 2], y, outer[j * 2 + 1], 1, 0, tint);
+    pushV(s, inner[j * 2], y, inner[j * 2 + 1], 1, 1, tint);
+    pushV(s, inner[i * 2], y, inner[i * 2 + 1], 0, 1, tint);
+    s.idx.push(base, base + 1, base + 2, base, base + 2, base + 3, base, base + 2, base + 1, base, base + 3, base + 2);
+  }
+  const count = s.idx.length / 3 - startTri;
+  if (count > 0) s.ranges.push({ start: startTri, count, label });
+  return count;
 }
 
 /** Thin parapet on the footprint edge. Not a surveyed cornice. Returns the triangle count added. */
@@ -742,45 +792,61 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
   let serviceTris = 0;
   let chajjaTris = 0;
   let tinRidgeTris = 0;
+  let setbackTris = 0;
+  let setbackBuildings = 0;
   const tankRank: { id: number; area: number }[] = [];
   const chajjaRank: { id: number; len: number }[] = [];
+  const setbackRank: { id: number; area: number }[] = [];
   for (const b of chunk.buildings) {
     const crown = buildingCrown(b.id, b.h);
-    if (crown.tank) {
-      const box = footprintSpan(b.outer);
-      tankRank.push({ id: b.id, area: box.sx * box.sz });
-    }
+    const box = footprintSpan(b.outer);
+    const area = box.sx * box.sz;
+    if (crown.tank) tankRank.push({ id: b.id, area });
     if (crown.chajja) {
       const edge = longestOuterEdge(b.outer);
       if (edge) chajjaRank.push({ id: b.id, len: edge.len });
     }
+    if (wantsSetback(b.id, b.h, b.holes?.length ?? 0)) setbackRank.push({ id: b.id, area });
   }
   tankRank.sort((a, b) => b.area - a.area);
   chajjaRank.sort((a, b) => b.len - a.len);
+  setbackRank.sort((a, b) => b.area - a.area);
   const tankIds = new Set(tankRank.slice(0, 280).map((item) => item.id));
   const chajjaIds = new Set(chajjaRank.slice(0, 420).map((item) => item.id));
+  const setbackIds = new Set(setbackRank.slice(0, SETBACK_CAP).map((item) => item.id));
   for (const b of chunk.buildings) {
     const plaster = plasterTint(b.id, b.hs);
     const slot = facadeSlot(b.id, b.h) % lib.facades.length;
-    const tint: Tint = slot >= 3 ? [0.84, 0.82, 0.78] : plaster;
+    const tint: Tint = slot >= 3 ? [0.92, 0.9, 0.86] : plaster;
     const shift = (hash32(b.id) % 1000) / 1000;
     const label = `building ${b.id} ${b.hs} ${b.h}m`;
     const crown = buildingCrown(b.id, b.h);
-    addWalls(b.outer, b.h, walls[slot], label, tint, shift);
-    for (const hole of b.holes || []) addWalls(hole, b.h, walls[slot], label, tint, shift);
-    const roofTint: Tint = [0.72, 0.68, 0.62];
-    addFlat(b.outer, b.holes, b.h, roofs, label, roofTint, 10);
+    const metres = b.h >= 16 ? 2.6 : 1.8;
+    const inset = setbackIds.has(b.id) ? insetRingMeters(b.outer, metres) : null;
+    const split = Math.min(SHOP_H, b.h - 2.6);
+    if (inset && split > 2.4) {
+      addWalls(b.outer, 0, split, walls[slot], label, tint, shift, true);
+      addWalls(inset, split, b.h, walls[slot], label, tint, shift, false);
+      setbackTris += addTerrace(b.outer, inset, split, roofs, label, [0.82, 0.78, 0.72]);
+      setbackBuildings++;
+    } else {
+      addWalls(b.outer, 0, b.h, walls[slot], label, tint, shift, true);
+    }
+    for (const hole of b.holes || []) addWalls(hole, 0, b.h, walls[slot], label, tint, shift, true);
+    const roofRing = inset && split > 2.4 ? inset : b.outer;
+    const roofTint: Tint = [0.42, 0.4, 0.37];
+    addFlat(roofRing, inset ? undefined : b.holes, b.h, roofs, label, roofTint, 10);
     if (crown.parapet) {
-      const added = addParapet(b.outer, b.h, crown.parapetH, roofs, label, roofTint);
+      const added = addParapet(roofRing, b.h, crown.parapetH, roofs, label, roofTint);
       parapetTris += added;
       if (added > 0) parapetBuildings++;
     }
     if (crown.tank && tankIds.has(b.id)) {
-      serviceTris += addServiceBox(b.outer, b.h, b.id, "tank", roofs, label, [0.22, 0.24, 0.26]);
+      serviceTris += addServiceBox(roofRing, b.h, b.id, "tank", roofs, label, [0.22, 0.24, 0.26]);
     }
-    if (crown.stair) serviceTris += addServiceBox(b.outer, b.h, b.id, "stair", roofs, label, [0.55, 0.52, 0.48]);
+    if (crown.stair && !inset) serviceTris += addServiceBox(b.outer, b.h, b.id, "stair", roofs, label, [0.55, 0.52, 0.48]);
     if (crown.chajja && chajjaIds.has(b.id)) chajjaTris += addChajja(b.outer, b.h, roofs, label, [0.78, 0.74, 0.66]);
-    if (crown.tinRidge) {
+    if (crown.tinRidge && !inset) {
       tinRidgeTris += addTinRidge(b.outer, b.h, 0.62 + (hash32(b.id) % 4) * 0.1, roofs, label, [0.62, 0.66, 0.62]);
     }
   }
@@ -792,6 +858,8 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
     roofMesh.userData.serviceTris = serviceTris;
     roofMesh.userData.chajjaTris = chajjaTris;
     roofMesh.userData.tinRidgeTris = tinRidgeTris;
+    roofMesh.userData.setbackTris = setbackTris;
+    roofMesh.userData.setbackBuildings = setbackBuildings;
     roofMesh.userData.roofTris = roofs.idx.length / 3;
   }
   add(roofMesh);
