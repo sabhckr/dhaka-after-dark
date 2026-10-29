@@ -6,6 +6,7 @@ import { buildFootBridgeMeshes } from "./footbridge.ts";
 import { kindFromCat, notableById } from "./landmarks.ts";
 import { filletGentleBends, miterOutline, prepareVisualRoads } from "./roads.ts";
 import { buildingCrown, facadeSlot, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks, SETBACK_CAP, wantsSetback } from "./place.ts";
+import { containedHoles, heroDrawHeight, heroSite, type HeroKind } from "./heroes.ts";
 import type { BuildingLod } from "./lod.ts";
 import { canopyGeometry, palmGeometry, sleeperGeometry, trunkGeometry } from "./prop-geo.ts";
 
@@ -862,6 +863,48 @@ export function retileBuildings(bag: ChunkObjects, chunk: ChunkFile, lib: Surfac
   return true;
 }
 
+/** Landmark crown on the concrete roof mesh. A few boxes, not a second building. */
+function addHeroCrown(kind: HeroKind, ring: number[], h: number, s: Surface, label: string, span: number): void {
+  const box = footprintSpan(ring);
+  const c = ringCentroid(ring);
+  if (!c || box.sx < 8 || box.sz < 8) return;
+  const white: Tint = [0.95, 0.92, 0.88];
+  const stone: Tint = [0.72, 0.7, 0.66];
+  if (kind === "sangsad" && span < 80) {
+    const hx = Math.min(6, box.sx * 0.22);
+    const hz = Math.min(6, box.sz * 0.22);
+    if (boxInside(c.x, c.z, hx, hz, ring)) upright(s, c.x, c.z, h, h + 2.4, hx, hz, stone);
+    return;
+  }
+  if (kind === "ahsan") {
+    const spots: [number, number, number][] = [
+      [box.minX + 4, c.z, 7],
+      [box.maxX - 4, c.z, 7],
+      [c.x, c.z, 3.4],
+    ];
+    for (const [x, z, rise] of spots) {
+      const hx = rise > 5 ? 1.8 : 2.4;
+      const hz = rise > 5 ? 1.8 : 2.2;
+      if (!boxInside(x, z, hx, hz, ring)) continue;
+      upright(s, x, z, h, h + rise, hx, hz, white);
+    }
+    return;
+  }
+  if (kind === "curzon") {
+    if (boxInside(c.x, c.z, 2.6, 2.6, ring)) {
+      upright(s, c.x, c.z, h, h + 4, 2.6, 2.6, white);
+      upright(s, c.x, c.z, h + 4, h + 7.5, 1.3, 1.3, white);
+    }
+    const brick: Tint = [0.5, 0.24, 0.2];
+    if (boxInside(box.minX + 3.5, c.z, 1.5, 1.5, ring)) upright(s, box.minX + 3.5, c.z, h, h + 6, 1.5, 1.5, brick);
+    if (boxInside(box.maxX - 3.5, c.z, 1.5, 1.5, ring)) upright(s, box.maxX - 3.5, c.z, h, h + 6, 1.5, 1.5, brick);
+    return;
+  }
+  if (kind === "museum") {
+    upright(s, c.x, c.z, h, h + 2.2, Math.min(18, box.sx * 0.28), 2.2, [0.22, 0.32, 0.48]);
+  }
+}
+
 function attachBuildings(
   group: THREE.Group,
   geometries: { dispose: () => void }[],
@@ -894,6 +937,7 @@ function attachBuildings(
   const chajjaRank: { id: number; len: number }[] = [];
   const setbackRank: { id: number; area: number }[] = [];
   for (const b of chunk.buildings) {
+    if (heroSite(b.id)) continue;
     const crown = buildingCrown(b.id, b.h);
     const box = footprintSpan(b.outer);
     const area = box.sx * box.sz;
@@ -911,6 +955,19 @@ function attachBuildings(
   const chajjaIds = new Set(chajjaRank.slice(0, 420).map((item) => item.id));
   const setbackIds = new Set(setbackRank.slice(0, SETBACK_CAP).map((item) => item.id));
   for (const b of chunk.buildings) {
+    const site = heroSite(b.id);
+    if (site) {
+      const box = footprintSpan(b.outer);
+      const span = Math.max(box.sx, box.sz);
+      const drawH = heroDrawHeight(site, span);
+      const holes = containedHoles(b.outer, b.holes);
+      const label = `${site.name} · approximate ${drawH}m · way ${b.id}`;
+      addWalls(b.outer, 0, drawH, roofs, label, site.tint, 0, false, "mass");
+      for (const hole of holes) addWalls(hole, 0, drawH, roofs, label, site.tint, 0, false, "mass");
+      addFlat(b.outer, holes, drawH, roofs, label, site.roof, 10);
+      addHeroCrown(site.kind, b.outer, drawH, roofs, label, span);
+      continue;
+    }
     const plaster = plasterTint(b.id, b.hs);
     const rawSlot = facadeSlot(b.id, b.h) % lib.facades.length;
     const slot = rawSlot % wallSlots;

@@ -112,12 +112,15 @@ export function buildAhsan(): THREE.Group {
 export function buildLalbagh(): THREE.Group {
   const g = new THREE.Group();
   const m = MAT();
-  put(g, m.brick, "box", [22, 5, 1.2], [0, 2.5, -8]);
-  put(g, m.brick, "box", [1.2, 5, 16], [-10.5, 2.5, 0]);
-  put(g, m.brick, "box", [1.2, 5, 16], [10.5, 2.5, 0]);
-  put(g, m.brick, "box", [4, 8, 4], [0, 4, -8]);
-  put(g, m.paint(0xf2e2c8), "box", [6, 5, 6], [0, 2.5, 0]);
-  put(g, m.paint(0x8d3b32), "cyl", [2.2, 2.2, 2, 10], [0, 6, 0]);
+  const brick = m.brick;
+  put(g, brick, "box", [48, 6.5, 1.6], [0, 3.25, -18]);
+  put(g, brick, "box", [1.6, 6.5, 36], [-23.2, 3.25, 0]);
+  put(g, brick, "box", [1.6, 6.5, 36], [23.2, 3.25, 0]);
+  put(g, brick, "box", [7, 9, 6], [0, 4.5, -18]);
+  put(g, m.paint(0xf2e2c8), "box", [10, 6, 10], [0, 3, 2]);
+  put(g, m.paint(0x8d3b32), "cyl", [3.2, 3.2, 2.4, 10], [0, 7.2, 2]);
+  put(g, m.paint(0x6a8f62), "box", [40, 0.12, 28], [0, 0.08, 2]);
+  put(g, signMaterial(["লালবাগ কেল্লা"], "#6b2a24", "#f4e4c4"), "plane", [6, 0.8], [0, 7.2, -14.9]);
   fitCollider(g);
   return g;
 }

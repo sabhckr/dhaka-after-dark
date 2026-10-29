@@ -20,10 +20,20 @@ Placed, not surveyed:
 - Uttara: easy-bike, plus a metro car sitting on a short display viaduct. That viaduct is not the Line 6 alignment.
 - Kamalapur: Benapole-style loco and coach, offset from the station building.
 - Shahjalal: one Biman-colored jet, offset from the terminal.
+- Lalbagh Fort node: a courtyard blockout (walls, gate, tomb). It is not the full rampart. The neighbouring footprints stay.
+
+The city also dresses four OSM footprints in place, instead of dropping a second mesh on them:
+
+- Jatiya Sangsad, way 18085267. Peripheral mass 33.5 m, inner ring 47 m. Those figures are the published block heights, not a survey. OSM had estimated 9 m. Collision uses the same heights.
+- Ahsan Manzil, way 624025793, on the palace node. Pink mass and towers.
+- Bangladesh National Museum, way 7392256 at Shahbagh.
+- Curzon Hall, way 1132918478, the nearest large footprint at the university. Not the whole campus.
 
 Not placed, on purpose:
 
-- Jatiya Sangsad, Ahsan Manzil, Lalbagh, the National Museum, and Curzon Hall. OSM footprints already occupy those sites.
+Not placed as their own showroom mesh, because the map now dresses the footprint:
+
+- The showroom discs for Sangsad, Ahsan Manzil, the National Museum, and Curzon Hall. The city uses the OSM ring, not those discs.
 - Footbridges, flyovers, street lights, cables, and rooftop tanks. The map already builds those from OSM or the dressing pass.
 - The Mustang. It is a Vice City prop, not local traffic.
 - Airline meshes use color blocks only. No logos.
