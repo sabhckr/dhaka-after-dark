@@ -5,7 +5,7 @@ import { isFootSpan, solidsFromChunk } from "./solids.ts";
 import { buildFootBridgeMeshes } from "./footbridge.ts";
 import { kindFromCat, notableById } from "./landmarks.ts";
 import { filletGentleBends, miterOutline, prepareVisualRoads } from "./roads.ts";
-import { facadeSlot, hash32, plasterTint, roadWantsMarks } from "./place.ts";
+import { buildingCrown, facadeSlot, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks } from "./place.ts";
 
 export const BLOCK = {
   ground: 0x141816,
@@ -252,9 +252,9 @@ function addWalls(ring: number[], h: number, s: Surface, label: string, tint: Ti
 }
 
 /** Thin parapet on the footprint edge. Not a surveyed cornice. Returns the triangle count added. */
-function addParapet(ring: number[], h: number, s: Surface, label: string, tint: Tint): number {
+function addParapet(ring: number[], h: number, lip: number, s: Surface, label: string, tint: Tint): number {
   const n = ring.length / 2;
-  if (n < 3 || h < 2.4) return 0;
+  if (n < 3 || h < 2.4 || lip <= 0) return 0;
   const startTri = s.idx.length / 3;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
@@ -264,7 +264,225 @@ function addParapet(ring: number[], h: number, s: Surface, label: string, tint: 
     const bz = ring[j * 2 + 1];
     const len = Math.hypot(bx - ax, bz - az);
     if (len < 0.45) continue;
-    pushWallQuad(s, ax, az, bx, bz, h + 0.03, h + 0.42, 0, len / 8, 0, 0.25, tint);
+    pushWallQuad(s, ax, az, bx, bz, h + 0.03, h + 0.03 + lip, 0, len / 8, 0, 0.25, tint);
+  }
+  const count = s.idx.length / 3 - startTri;
+  if (count > 0) s.ranges.push({ start: startTri, count, label });
+  return count;
+}
+
+function footprintSpan(ring: number[]) {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < ring.length; i += 2) {
+    minX = Math.min(minX, ring[i]);
+    maxX = Math.max(maxX, ring[i]);
+    minZ = Math.min(minZ, ring[i + 1]);
+    maxZ = Math.max(maxZ, ring[i + 1]);
+  }
+  return { minX, maxX, minZ, maxZ, sx: maxX - minX, sz: maxZ - minZ };
+}
+
+function longestOuterEdge(ring: number[]) {
+  const c = ringCentroid(ring);
+  if (!c || ring.length < 6) return null;
+  const n = ring.length / 2;
+  let best: { ax: number; az: number; bx: number; bz: number; len: number; nx: number; nz: number } | null = null;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const ax = ring[i * 2];
+    const az = ring[i * 2 + 1];
+    const bx = ring[j * 2];
+    const bz = ring[j * 2 + 1];
+    const len = Math.hypot(bx - ax, bz - az);
+    if (len < 0.5 || (best && len <= best.len)) continue;
+    let nx = -(bz - az) / len;
+    let nz = (bx - ax) / len;
+    const mx = (ax + bx) / 2;
+    const mz = (az + bz) / 2;
+    if ((c.x - mx) * nx + (c.z - mz) * nz > 0) {
+      nx = -nx;
+      nz = -nz;
+    }
+    best = { ax, az, bx, bz, len, nx, nz };
+  }
+  return best;
+}
+
+function pushFacingQuad(
+  s: Surface,
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  cx: number,
+  cy: number,
+  cz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  tint: Tint,
+  outX: number,
+  outZ: number,
+) {
+  const base = s.pos.length / 3;
+  pushV(s, ax, ay, az, 0, 0, tint);
+  pushV(s, bx, by, bz, 1, 0, tint);
+  pushV(s, cx, cy, cz, 1, 1, tint);
+  pushV(s, dx, dy, dz, 0, 1, tint);
+  const abx = bx - ax;
+  const aby = by - ay;
+  const abz = bz - az;
+  const acx = cx - ax;
+  const acy = cy - ay;
+  const acz = cz - az;
+  const nx = aby * acz - abz * acy;
+  const nz = abx * acy - aby * acx;
+  const mx = (ax + bx + cx + dx) / 4;
+  const mz = (az + bz + cz + dz) / 4;
+  const outward = nx * (mx - outX) + nz * (mz - outZ) >= 0;
+  if (outward) s.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  else s.idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
+}
+
+/** Concrete sunshade on the longest edge. The street side is not in the data. */
+function addChajja(ring: number[], h: number, s: Surface, label: string, tint: Tint): number {
+  const edge = longestOuterEdge(ring);
+  if (!edge || edge.len < 6 || h < 3.4) return 0;
+  const y = Math.min(3.05, h - 0.22);
+  if (y < 2.3) return 0;
+  const depth = 0.62;
+  const ox = edge.nx * depth;
+  const oz = edge.nz * depth;
+  const startTri = s.idx.length / 3;
+  const base = s.pos.length / 3;
+  pushV(s, edge.ax, y, edge.az, 0, 0, tint);
+  pushV(s, edge.bx, y, edge.bz, 1, 0, tint);
+  pushV(s, edge.bx + ox, y, edge.bz + oz, 1, 1, tint);
+  pushV(s, edge.ax + ox, y, edge.az + oz, 0, 1, tint);
+  s.idx.push(base, base + 1, base + 2, base, base + 2, base + 3, base, base + 2, base + 1, base, base + 3, base + 2);
+  pushWallQuad(s, edge.ax + ox, edge.az + oz, edge.bx + ox, edge.bz + oz, y - 0.1, y, 0, edge.len / 6, 0, 0.2, tint);
+  pushWallQuad(s, edge.bx + ox, edge.bz + oz, edge.ax + ox, edge.az + oz, y - 0.1, y, 0, edge.len / 6, 0, 0.2, tint);
+  const count = s.idx.length / 3 - startTri;
+  if (count > 0) s.ranges.push({ start: startTri, count, label });
+  return count;
+}
+
+function boxInside(x: number, z: number, hx: number, hz: number, outer: number[]): boolean {
+  return (
+    pointInOuter(x, z, outer) &&
+    pointInOuter(x - hx, z - hz, outer) &&
+    pointInOuter(x + hx, z - hz, outer) &&
+    pointInOuter(x - hx, z + hz, outer) &&
+    pointInOuter(x + hx, z + hz, outer)
+  );
+}
+
+/** Rooftop tank or stair hut. Skipped when the box would leave the footprint. */
+function addServiceBox(
+  ring: number[],
+  h: number,
+  id: number,
+  kind: "tank" | "stair",
+  s: Surface,
+  label: string,
+  tint: Tint,
+): number {
+  const box = footprintSpan(ring);
+  const c = ringCentroid(ring);
+  if (!c || box.sx < 4.2 || box.sz < 4.2) return 0;
+  const hsh = hash32(id + (kind === "tank" ? 11 : 19));
+  const hx = kind === "tank" ? 0.55 + (hsh % 4) * 0.1 : 0.85;
+  const hz = kind === "tank" ? 0.7 + (hsh % 3) * 0.08 : 0.65;
+  const rise = kind === "tank" ? 1.05 + (hsh % 5) * 0.1 : 2.1;
+  const ox = ((hsh % 7) - 3) * Math.min(1.2, box.sx * 0.14);
+  const oz = (((hsh >>> 3) % 7) - 3) * Math.min(1.2, box.sz * 0.14);
+  const flip = kind === "stair" ? -1 : 1;
+  const marginX = hx + 0.3;
+  const marginZ = hz + 0.3;
+  let x = Math.min(box.maxX - marginX, Math.max(box.minX + marginX, c.x + ox * flip));
+  let z = Math.min(box.maxZ - marginZ, Math.max(box.minZ + marginZ, c.z + oz * flip));
+  if (!boxInside(x, z, hx, hz, ring)) {
+    x = c.x;
+    z = c.z;
+  }
+  if (!boxInside(x, z, hx, hz, ring)) return 0;
+  const startTri = s.idx.length / 3;
+  upright(s, x, z, h + 0.04, h + 0.04 + rise, hx, hz, tint);
+  const count = s.idx.length / 3 - startTri;
+  if (count > 0) s.ranges.push({ start: startTri, count, label });
+  return count;
+}
+
+/** Pitched cap on a 4-corner tin shed. The flat roof plate underneath stays. */
+function addTinRidge(ring: number[], h: number, rise: number, s: Surface, label: string, tint: Tint): number {
+  if (ring.length !== 8 || rise <= 0) return 0;
+  const ax = ring[0];
+  const az = ring[1];
+  const bx = ring[2];
+  const bz = ring[3];
+  const cx = ring[4];
+  const cz = ring[5];
+  const dx = ring[6];
+  const dz = ring[7];
+  const e01 = Math.hypot(bx - ax, bz - az);
+  const e12 = Math.hypot(cx - bx, cz - bz);
+  const y = h + 0.02;
+  const yr = y + rise;
+  const heart = ringCentroid(ring) ?? { x: ax, z: az };
+  const startTri = s.idx.length / 3;
+  const slope = (
+    x0: number,
+    z0: number,
+    x1: number,
+    z1: number,
+    rx: number,
+    rz: number,
+    sx: number,
+    sz: number,
+  ) => {
+    pushFacingQuad(s, x0, y, z0, x1, y, z1, rx, yr, rz, sx, yr, sz, tint, heart.x, heart.z);
+  };
+  const gable = (x0: number, z0: number, x1: number, z1: number, px: number, pz: number) => {
+    const base = s.pos.length / 3;
+    pushV(s, x0, y, z0, 0, 0, tint);
+    pushV(s, x1, y, z1, 1, 0, tint);
+    pushV(s, px, yr, pz, 0.5, 1, tint);
+    const abx = x1 - x0;
+    const aby = 0;
+    const abz = z1 - z0;
+    const acx = px - x0;
+    const acy = yr - y;
+    const acz = pz - z0;
+    const nx = aby * acz - abz * acy;
+    const nz = abx * acy - aby * acx;
+    const mx = (x0 + x1 + px) / 3;
+    const mz = (z0 + z1 + pz) / 3;
+    if (nx * (mx - heart.x) + nz * (mz - heart.z) >= 0) s.idx.push(base, base + 1, base + 2);
+    else s.idx.push(base, base + 2, base + 1);
+  };
+  if (e01 >= e12) {
+    const p1x = (bx + cx) / 2;
+    const p1z = (bz + cz) / 2;
+    const p2x = (dx + ax) / 2;
+    const p2z = (dz + az) / 2;
+    slope(ax, az, bx, bz, p1x, p1z, p2x, p2z);
+    slope(cx, cz, dx, dz, p2x, p2z, p1x, p1z);
+    gable(bx, bz, cx, cz, p1x, p1z);
+    gable(dx, dz, ax, az, p2x, p2z);
+  } else {
+    const p1x = (ax + bx) / 2;
+    const p1z = (az + bz) / 2;
+    const p2x = (cx + dx) / 2;
+    const p2z = (cz + dz) / 2;
+    slope(bx, bz, cx, cz, p2x, p2z, p1x, p1z);
+    slope(dx, dz, ax, az, p1x, p1z, p2x, p2z);
+    gable(ax, az, bx, bz, p1x, p1z);
+    gable(cx, cz, dx, dz, p2x, p2z);
   }
   const count = s.idx.length / 3 - startTri;
   if (count > 0) s.ranges.push({ start: startTri, count, label });
@@ -521,20 +739,49 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
   const roofs = blank();
   let parapetTris = 0;
   let parapetBuildings = 0;
+  let serviceTris = 0;
+  let chajjaTris = 0;
+  let tinRidgeTris = 0;
+  const tankRank: { id: number; area: number }[] = [];
+  const chajjaRank: { id: number; len: number }[] = [];
+  for (const b of chunk.buildings) {
+    const crown = buildingCrown(b.id, b.h);
+    if (crown.tank) {
+      const box = footprintSpan(b.outer);
+      tankRank.push({ id: b.id, area: box.sx * box.sz });
+    }
+    if (crown.chajja) {
+      const edge = longestOuterEdge(b.outer);
+      if (edge) chajjaRank.push({ id: b.id, len: edge.len });
+    }
+  }
+  tankRank.sort((a, b) => b.area - a.area);
+  chajjaRank.sort((a, b) => b.len - a.len);
+  const tankIds = new Set(tankRank.slice(0, 280).map((item) => item.id));
+  const chajjaIds = new Set(chajjaRank.slice(0, 420).map((item) => item.id));
   for (const b of chunk.buildings) {
     const plaster = plasterTint(b.id, b.hs);
     const slot = facadeSlot(b.id, b.h) % lib.facades.length;
     const tint: Tint = slot >= 3 ? [0.84, 0.82, 0.78] : plaster;
     const shift = (hash32(b.id) % 1000) / 1000;
     const label = `building ${b.id} ${b.hs} ${b.h}m`;
+    const crown = buildingCrown(b.id, b.h);
     addWalls(b.outer, b.h, walls[slot], label, tint, shift);
     for (const hole of b.holes || []) addWalls(hole, b.h, walls[slot], label, tint, shift);
     const roofTint: Tint = [0.72, 0.68, 0.62];
     addFlat(b.outer, b.holes, b.h, roofs, label, roofTint, 10);
-    if (b.h >= 6 && hash32(b.id) % 4 === 0) {
-      const added = addParapet(b.outer, b.h, roofs, label, roofTint);
+    if (crown.parapet) {
+      const added = addParapet(b.outer, b.h, crown.parapetH, roofs, label, roofTint);
       parapetTris += added;
       if (added > 0) parapetBuildings++;
+    }
+    if (crown.tank && tankIds.has(b.id)) {
+      serviceTris += addServiceBox(b.outer, b.h, b.id, "tank", roofs, label, [0.22, 0.24, 0.26]);
+    }
+    if (crown.stair) serviceTris += addServiceBox(b.outer, b.h, b.id, "stair", roofs, label, [0.55, 0.52, 0.48]);
+    if (crown.chajja && chajjaIds.has(b.id)) chajjaTris += addChajja(b.outer, b.h, roofs, label, [0.78, 0.74, 0.66]);
+    if (crown.tinRidge) {
+      tinRidgeTris += addTinRidge(b.outer, b.h, 0.62 + (hash32(b.id) % 4) * 0.1, roofs, label, [0.62, 0.66, 0.62]);
     }
   }
   walls.forEach((s, i) => add(meshFrom(s, lib.facades[i] ?? lib.facades[0])));
@@ -542,6 +789,9 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
   if (roofMesh) {
     roofMesh.userData.parapetTris = parapetTris;
     roofMesh.userData.parapetBuildings = parapetBuildings;
+    roofMesh.userData.serviceTris = serviceTris;
+    roofMesh.userData.chajjaTris = chajjaTris;
+    roofMesh.userData.tinRidgeTris = tinRidgeTris;
     roofMesh.userData.roofTris = roofs.idx.length / 3;
   }
   add(roofMesh);

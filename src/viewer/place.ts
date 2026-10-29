@@ -83,6 +83,33 @@ export function facadeSlot(id: number, h: number): number {
   return hsh % 3;
 }
 
+/**
+ * Deterministic roof and street-edge extras. Not surveyed architecture.
+ * Tin sheds skip the parapet and the concrete tank. The chajja is the longest
+ * outer edge only, so it is a shop-front guess, not a known street side.
+ */
+export type BuildingCrown = {
+  parapet: boolean;
+  parapetH: number;
+  tank: boolean;
+  stair: boolean;
+  chajja: boolean;
+  tinRidge: boolean;
+};
+
+export function buildingCrown(id: number, h: number): BuildingCrown {
+  const tin = facadeSlot(id, h) === 4;
+  const parapet = h >= 5 && !tin && hash32(id) % 5 !== 4;
+  return {
+    parapet,
+    parapetH: parapet ? (h >= 14 ? 0.85 : 0.5) : 0,
+    tank: h >= 6 && !tin && hash32(id + 11) % 5 < 3,
+    stair: h >= 14 && !tin && hash32(id + 19) % 3 === 0,
+    chajja: h >= 4 && hash32(id + 3) % 3 !== 2,
+    tinRidge: tin && h <= 9,
+  };
+}
+
 const PLASTER: [number, number, number][] = [
   [0.86, 0.8, 0.7],
   [0.78, 0.72, 0.62],

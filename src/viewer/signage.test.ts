@@ -7,9 +7,9 @@ import type { ChunkFile } from "../geo/types.ts";
 import { POSTER_SPECS, USER_MEME, forbiddenPolitical } from "./copy.ts";
 import { buildChunkObjects, type SurfaceLibrary } from "./meshes.ts";
 import {
+  buildingCrown,
   cableSegments,
   facadeSlot,
-  hash32,
   placeShop,
   plasterTint,
   posterCluster,
@@ -155,6 +155,7 @@ test("major roads keep lane marks; building corners stay on the footprint", () =
 
 test("parapets are extra triangles on the roof mesh, not extra draw calls", () => {
   const built = buildChunkObjects(fixture(), lambertLib());
+  const crown = buildingCrown(5, 6);
   let roofs = 0;
   let parapetTris = 0;
   let roofTris = 0;
@@ -165,10 +166,49 @@ test("parapets are extra triangles on the roof mesh, not extra draw calls", () =
     parapetTris = mesh.userData.parapetTris as number;
     roofTris = mesh.userData.roofTris as number;
     assert.equal(Array.isArray(mesh.material), false);
+    assert.equal((mesh.userData.chajjaTris as number) > 0, crown.chajja);
+    assert.equal((mesh.userData.serviceTris as number) > 0, crown.tank || crown.stair);
+    assert.equal((mesh.userData.tinRidgeTris as number) > 0, crown.tinRidge);
   });
   assert.equal(roofs, 1);
-  assert.equal(parapetTris > 0, hash32(5) % 4 === 0);
+  assert.equal(parapetTris > 0, crown.parapet);
   assert.ok(roofTris > parapetTris);
+  releaseChunkResources(built);
+});
+
+test("roof extras stay on the footprint and do not change its plate", () => {
+  const outer = [0, 0, 12, 0, 12, 9, 0, 9];
+  const chunk = fixture();
+  chunk.buildings = [
+    { id: 5, h: 6, hs: "estimated", outer },
+    { id: 80, h: 4.2, hs: "estimated", outer: [20, 0, 28, 0, 28, 7, 20, 7] },
+    { id: 140, h: 18, hs: "measured", outer: [40, 0, 52, 0, 52, 14, 40, 14] },
+  ];
+  const built = buildChunkObjects(chunk, lambertLib());
+  let pts: number[] = [];
+  built.group.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || mesh.userData.roofTris == null) return;
+    const attr = mesh.geometry.getAttribute("position");
+    pts = [];
+    for (let i = 0; i < attr.count; i++) pts.push(attr.getX(i), attr.getY(i), attr.getZ(i));
+  });
+  const has = (x: number, y: number, z: number) =>
+    pts.some((v, i) => i % 3 === 0 && Math.abs(pts[i] - x) < 1e-3 && Math.abs(pts[i + 1] - y) < 1e-3 && Math.abs(pts[i + 2] - z) < 1e-3);
+  assert.equal(has(0, 6, 0), true);
+  assert.equal(has(12, 6, 9), true);
+  const crown = buildingCrown(5, 6);
+  if (crown.chajja) {
+    const outside = pts.some((v, i) => i % 3 === 0 && pts[i + 2] < -0.4 && pts[i + 2] > -0.8 && Math.abs(pts[i + 1] - 3.05) < 1e-3);
+    assert.equal(outside, true);
+  }
+  if (crown.tank) {
+    const tank = pts.some((v, i) => i % 3 === 0 && pts[i] > 0 && pts[i] < 12 && pts[i + 2] > 0 && pts[i + 2] < 9 && pts[i + 1] > 6.8);
+    assert.equal(tank, true);
+  }
+  const tin = chunk.buildings[1];
+  assert.equal(buildingCrown(tin.id, tin.h).tinRidge, facadeSlot(tin.id, tin.h) === 4);
+  assert.deepEqual(buildingCrown(140, 18), buildingCrown(140, 18));
   releaseChunkResources(built);
 });
 
