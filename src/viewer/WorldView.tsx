@@ -17,7 +17,9 @@ import { GRADE, PALETTE } from "@/viewer/grade";
 import { buildDressing, type Dressing } from "@/viewer/dressing";
 import { LOOKS, LOOK_ORDER, easeLook, lerpLook, type LookId } from "@/viewer/looks";
 import { createCityMaterials, loadBanglaFont } from "@/viewer/materials";
-import { buildChunkObjects, labelFromHit } from "@/viewer/meshes";
+import { buildChunkObjects, labelFromHit, retileBuildings } from "@/viewer/meshes";
+import { BlockBatches } from "@/viewer/block-batch";
+import { pixelRatioCap, selectBuildingLod, treesHidden, type BuildingLod, type RenderQuality } from "@/viewer/lod";
 import { installViceGrade } from "@/viewer/post";
 import { banglaHasInk } from "@/viewer/posters";
 import { mountIntegratedAssets } from "@/assets/street";
@@ -85,6 +87,7 @@ declare global {
       reset: () => void;
       summary: () => ReturnType<ReturnType<typeof createFrameProbe>["summary"]>;
       census: () => ReturnType<typeof censusScene>;
+      batches: () => { staticMeshes: number; instanceMeshes: number; instances: number };
       beginCapture: () => void;
       endCapture: () => void;
       capture: () => Promise<{ ms: number; bytes: number; note: string }>;
@@ -92,6 +95,9 @@ declare global {
       setGroupVisible: (name: string, visible: boolean) => boolean;
       renderer: () => string;
       memory: () => { jsHeapUsed?: number; jsHeapTotal?: number } | null;
+      pause: (value: boolean) => void;
+      halt: () => void;
+      resume: () => void;
     };
   }
 }
@@ -141,7 +147,7 @@ export function WorldView() {
   const [spawnId, setSpawnId] = useState("sangsad");
   const [panel, setPanel] = useState(true);
   const [lookId, setLookId] = useState<LookId>("neon");
-  const [quality, setQuality] = useState<"low" | "high">("high");
+  const [quality, setQuality] = useState<RenderQuality>("high");
   const [rideMode, setRideMode] = useState<RideMode>("fly");
   const [weatherId, setWeatherId] = useState<WeatherId>("clear");
   const [fontNote, setFontNote] = useState("");
@@ -154,7 +160,7 @@ export function WorldView() {
   rideModeRef.current = rideMode;
   weatherRef.current = weatherId;
   const pendingSpawn = useRef<Spawn | null>(null);
-  const apiRef = useRef<{ setLook: (id: LookId) => void; setQuality: (q: "low" | "high") => void } | null>(null);
+  const apiRef = useRef<{ setLook: (id: LookId) => void; setQuality: (q: RenderQuality) => void } | null>(null);
 
   useEffect(() => {
     let cancel = false;
@@ -186,6 +192,11 @@ export function WorldView() {
     let stop = () => {};
 
     void (async () => {
+      const qParam = new URLSearchParams(window.location.search).get("quality");
+      if (qParam === "low" || qParam === "medium" || qParam === "high") {
+        qualityRef.current = qParam;
+        setQuality(qParam);
+      }
       const fontLoaded = await loadBanglaFont();
       if (dead) return;
       const renderer = makeRenderer(mount);
@@ -255,6 +266,8 @@ export function WorldView() {
       rain.frustumCulled = false;
       rain.visible = false;
       scene.add(rain);
+      const blocks = new BlockBatches();
+      scene.add(blocks.root);
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
       const spawnOf = (id: string): Spawn => manifest.spawns.find((s) => s.id === id) || manifest.spawns[0];
@@ -299,11 +312,14 @@ export function WorldView() {
         for (const [key, bag] of bags) {
           const cell = parseChunkKey(key);
           const dist = Math.max(Math.abs(cell.ix - ix), Math.abs(cell.iy - iy));
-          const show = !farPropsHidden(dist);
+          const showTrees = !treesHidden(dist, qualityRef.current);
+          const showDress = !farPropsHidden(dist);
           const trees = bag.group.getObjectByName("trees");
           const dress = bag.group.getObjectByName("dressing");
-          if (trees) trees.visible = show;
-          if (dress) dress.visible = show;
+          if (trees) trees.visible = showTrees;
+          if (dress) dress.visible = showDress;
+          blocks.setChunkVisible(key, "trees", showTrees);
+          blocks.setChunkVisible(key, "dressing", showDress);
         }
       };
       const errors: string[] = [];
@@ -331,18 +347,57 @@ export function WorldView() {
         toLook = next;
         blend = reduceMotion ? 1 : 0;
       };
-      const paintQuality = (q: "low" | "high") => {
+      const paintQuality = (q: RenderQuality) => {
         qualityRef.current = q;
         lib.setQuality(q);
         life.setQuality(q);
         traffic.setQuality(q);
-        renderer.setPixelRatio(q === "high" ? Math.min(window.devicePixelRatio || 1, 1.5) : 1);
+        renderer.setPixelRatio(pixelRatioCap(q, window.devicePixelRatio || 1));
         renderer.setSize(mount.clientWidth || 1, mount.clientHeight || 1);
-        for (const bag of bags.values()) {
-          const dress = bag.group.userData.dress as Dressing | undefined;
-          if (!dress) continue;
-          if (dress.cables) dress.cables.visible = q === "high";
+        for (const [key, bag] of bags) {
+          const cell = parseChunkKey(key);
+          const dist = Number.isFinite(detailCell.ix)
+            ? Math.max(Math.abs(cell.ix - detailCell.ix), Math.abs(cell.iy - detailCell.iy))
+            : 0;
+          const next = selectBuildingLod(dist, q);
+          if (bag.group.userData.lod !== next) {
+            const chunk = bag.group.userData.chunk as ChunkFile | undefined;
+            if (chunk) retileBuildings(bag, chunk, lib.surfaces, next);
+          }
+          if (bag.group.userData.dressQuality !== q) {
+            const chunk = bag.group.userData.chunk as ChunkFile | undefined;
+            const old = bag.group.userData.dress as Dressing | undefined;
+            if (chunk && old) {
+              blocks.dropGroup(key, "dressing");
+              old.group.removeFromParent();
+              for (const geo of old.geometries) {
+                const at = bag.geometries.indexOf(geo);
+                if (at >= 0) bag.geometries.splice(at, 1);
+                geo.dispose();
+              }
+              for (const mesh of old.instanced) {
+                const at = bag.instanced.indexOf(mesh);
+                if (at >= 0) bag.instanced.splice(at, 1);
+                (mesh as THREE.Object3D).removeFromParent?.();
+                mesh.dispose();
+              }
+              const shops = (bag.group.userData.shops as ShopRec[] | undefined) ?? [];
+              const dress = buildDressing(chunk, shops, lib, q);
+              bag.group.add(dress.group);
+              bag.geometries.push(...dress.geometries);
+              bag.instanced.push(...dress.instanced);
+              blocks.absorb(key, cell.ix, cell.iy, dress.group, {
+                trees: false,
+                dressing: !farPropsHidden(dist),
+                rails: false,
+              });
+              bag.instanced = bag.instanced.filter((mesh) => (mesh as THREE.Object3D).parent != null);
+              bag.group.userData.dress = dress;
+              bag.group.userData.dressQuality = q;
+            }
+          }
         }
+        if (Number.isFinite(detailCell.ix)) paintProps(detailCell.ix, detailCell.iy);
         paintCity(lookRef.current);
       };
 
@@ -409,19 +464,30 @@ export function WorldView() {
             if (dead || !scheduler.loaded.has(key)) return;
             let built: ReturnType<typeof buildChunkObjects>;
             try {
-              built = buildChunkObjects(chunk, lib.surfaces);
+              const dist = Math.max(Math.abs(ix - scheduler.focus.ix), Math.abs(iy - scheduler.focus.iy));
+              const lod = selectBuildingLod(dist, qualityRef.current);
+              built = buildChunkObjects(chunk, lib.surfaces, lod);
               const dress = buildDressing(chunk, shops, lib, qualityRef.current);
               built.group.add(dress.group);
               built.geometries.push(...dress.geometries);
               built.instanced.push(...dress.instanced);
+              blocks.absorb(key, ix, iy, built.group, {
+                trees: !treesHidden(dist, qualityRef.current),
+                dressing: !farPropsHidden(dist),
+                rails: true,
+              });
+              built.instanced = built.instanced.filter((mesh) => (mesh as THREE.Object3D).parent != null);
               built.group.userData.chunk = chunk;
+              built.group.userData.shops = shops;
               built.group.userData.dress = dress;
+              built.group.userData.dressQuality = qualityRef.current;
             } catch (err) {
               errors.push(`${key}: ${err instanceof Error ? err.message : "mesh"}`);
               if (errors.length > 6) errors.shift();
               return;
             }
             if (dead || !scheduler.loaded.has(key)) {
+              blocks.drop(key);
               releaseChunkResources(built);
               return;
             }
@@ -446,6 +512,7 @@ export function WorldView() {
           solids.deleteChunk(key);
           const bag = bags.get(key);
           if (!bag) return;
+          blocks.drop(key);
           scene.remove(bag.group);
           releaseChunkResources(bag);
           bags.delete(key);
@@ -534,6 +601,10 @@ export function WorldView() {
         if (yaw != null) fly.yaw = yaw;
         if (pitch != null) fly.pitch = pitch;
       };
+      (window as Window & { __setQuality?: (q: RenderQuality) => void }).__setQuality = (q) => {
+        setQuality(q);
+        paintQuality(q);
+      };
       (window as Window & { __setLook?: (id: LookId) => void }).__setLook = (id) => {
         lookRef.current = id;
         paintCity(id);
@@ -579,6 +650,7 @@ export function WorldView() {
         reset: () => probe.reset(),
         summary: () => probe.summary(),
         census: () => censusScene(scene),
+        batches: () => blocks.stats(),
         beginCapture: () => probe.beginCapture(),
         endCapture: () => probe.endCapture(),
         capture: async () => {
@@ -618,6 +690,11 @@ export function WorldView() {
           if (!heap) return null;
           return { jsHeapUsed: heap.usedJSHeapSize, jsHeapTotal: heap.totalJSHeapSize };
         },
+        pause: (value: boolean) => {
+          paused = value;
+        },
+        halt: () => renderer.setAnimationLoop(null),
+        resume: () => renderer.setAnimationLoop(loop),
       };
 
       fetch("/world/overview.json")
@@ -633,7 +710,9 @@ export function WorldView() {
         })
         .catch(() => {});
 
+      let paused = false;
       const loop = (stamp: number) => {
+        if (paused) return;
         const gap = probe.begin(performance.now());
         timer.update(stamp);
         const dt = timer.getDelta();
@@ -711,6 +790,20 @@ export function WorldView() {
         if (here.ix !== detailCell.ix || here.iy !== detailCell.iy) {
           detailCell = here;
           paintProps(here.ix, here.iy);
+        }
+        const lodBudget = performance.now() + 8;
+        let retiled = false;
+        for (const [key, bag] of bags) {
+          if (retiled && performance.now() > lodBudget) break;
+          const cell = parseChunkKey(key);
+          const dist = Math.max(Math.abs(cell.ix - here.ix), Math.abs(cell.iy - here.iy));
+          const prev = bag.group.userData.lod as BuildingLod | undefined;
+          const next = selectBuildingLod(dist, qualityRef.current, prev);
+          if (next === prev) continue;
+          const chunk = bag.group.userData.chunk as ChunkFile | undefined;
+          if (!chunk) continue;
+          retileBuildings(bag, chunk, lib.surfaces, next);
+          retiled = true;
         }
         const renderT0 = performance.now();
         renderer.render(scene, camera);
@@ -801,6 +894,7 @@ export function WorldView() {
         observer.disconnect();
         for (const bag of bags.values()) releaseChunkResources(bag);
         bags.clear();
+        blocks.dispose();
         yard.dispose();
         life.dispose();
         traffic.dispose();
@@ -820,6 +914,7 @@ export function WorldView() {
         delete window.__controlsTest;
         delete window.__npc;
         delete (window as Window & { __teleport?: unknown }).__teleport;
+        delete (window as Window & { __setQuality?: unknown }).__setQuality;
         delete (window as Window & { __setLook?: unknown }).__setLook;
         delete (window as Window & { __setWeather?: unknown }).__setWeather;
         delete window.__perf;
@@ -927,13 +1022,19 @@ export function WorldView() {
                   </button>
                 ))}
               </div>
-              <button
-                type="button"
-                className="mt-2 min-h-11 rounded-full border border-line bg-bg px-3 text-xs text-fg"
-                onClick={() => setQuality((q) => (q === "high" ? "low" : "high"))}
-              >
-                Quality {quality === "high" ? "high" : "low"}
-              </button>
+              <p className="mt-3 text-xs text-muted">Quality</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(["low", "medium", "high"] as const).map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`min-h-11 rounded-full border px-3 text-xs ${quality === id ? "border-accent bg-accent text-bg" : "border-line bg-bg text-fg"}`}
+                    onClick={() => setQuality(id)}
+                  >
+                    {id}
+                  </button>
+                ))}
+              </div>
               <label className="mt-3 block text-xs text-muted" htmlFor="spawn">
                 Spawn
               </label>

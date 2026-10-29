@@ -108,7 +108,7 @@ export function createCityLife(scene: THREE.Scene, world: SolidWorld) {
       pop.tick(dt);
       sync();
     },
-    setQuality(quality: "low" | "high") {
+    setQuality(quality: "low" | "medium" | "high") {
       pop.setQuality(quality);
     },
     interact() {

@@ -180,8 +180,8 @@ export function createCityTraffic(scene: THREE.Scene, solids: SolidWorld) {
       sim.tick(dt, player);
       sync(dt);
     },
-    setQuality(quality: "low" | "high") {
-      sim.max = quality === "high" ? 14 : 7;
+    setQuality(quality: "low" | "medium" | "high") {
+      sim.max = quality === "high" ? 14 : quality === "medium" ? 10 : 6;
       if (sim.cars.length > sim.max) sim.cars.splice(sim.max);
     },
     setContactShadows(enabled: boolean) {

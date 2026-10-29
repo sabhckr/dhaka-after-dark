@@ -119,8 +119,8 @@ export class Population {
     }
   }
 
-  setQuality(quality: "low" | "high"): void {
-    this.max = quality === "low" ? 12 : 26;
+  setQuality(quality: "low" | "medium" | "high"): void {
+    this.max = quality === "high" ? 26 : quality === "medium" ? 16 : 10;
   }
 
   spawnAgent(role: RoleId, x: number, z: number, chunk = "test"): Npc | null {

@@ -177,8 +177,8 @@ export function censusScene(scene: THREE.Object3D): { rows: CensusRow[]; meshes:
     let cursor: THREE.Object3D | null = mesh;
     let name = "other";
     while (cursor) {
-      if (cursor.name === "traffic" || cursor.name === "npcs" || cursor.name === "asset-yard" || cursor.name.startsWith("chunk-")) {
-        name = cursor.name.startsWith("chunk-") ? "chunks" : cursor.name;
+      if (cursor.name === "traffic" || cursor.name === "npcs" || cursor.name === "asset-yard" || cursor.name === "block-batches" || cursor.name.startsWith("chunk-")) {
+        name = cursor.name.startsWith("chunk-") ? "chunks" : cursor.name === "block-batches" ? "batches" : cursor.name;
         break;
       }
       cursor = cursor.parent;

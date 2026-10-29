@@ -6,6 +6,8 @@ import { POSTER_SPECS } from "@/viewer/copy.ts";
 import type { CityMaterials } from "@/viewer/materials.ts";
 import { paintShopAtlas } from "@/viewer/posters.ts";
 import { canvasTexture } from "@/viewer/proc-tex.ts";
+import { dressBudget, type RenderQuality } from "@/viewer/lod.ts";
+import { antennaGeometry, lampHeadGeometry, poleGeometry, tankGeometry } from "@/viewer/prop-geo.ts";
 import {
   cableSegments,
   lampPoints,
@@ -81,14 +83,15 @@ export type Dressing = {
   cables: THREE.Object3D | null;
 };
 
-export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMaterials, quality: "low" | "high"): Dressing {
+export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMaterials, quality: RenderQuality): Dressing {
   const group = new THREE.Group();
   group.name = "dressing";
   const geometries: { dispose: () => void }[] = [];
   const instanced: { dispose: () => void }[] = [];
   const buildings = chunk.buildings;
+  const budget = dressBudget(quality);
 
-  const poses = rankShops(shops, quality === "high" ? 28 : 8)
+  const poses = rankShops(shops, budget.shops)
     .map((shop) => placeShop(shop, buildings))
     .filter((pose): pose is ShopPose => pose != null);
   if (poses.length && lib.fontOk) {
@@ -138,7 +141,7 @@ export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMater
   posters.name = "posters";
   const claimed = new Set(poses.map((pose) => pose.buildingId).filter((id): id is number => id != null));
   if (lib.fontOk && lib.cells.length === POSTER_SPECS.length) {
-    const hosts = pickPosterHosts(buildings, posterBudget(buildings.length, chunk.ix, chunk.iy, "high"), 0x51ed);
+    const hosts = pickPosterHosts(buildings, posterBudget(buildings.length, chunk.ix, chunk.iy, budget.posters), 0x51ed);
     const buckets = lib.sheets.map(() => blank());
     for (const host of hosts) {
       if (claimed.has(host.id)) continue;
@@ -175,12 +178,16 @@ export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMater
   }
   group.add(posters);
 
-  const lamps = lampPoints(chunk.roads, quality === "high" ? 70 : 28);
+  const lamps = lampPoints(chunk.roads, budget.lamps);
   if (lamps.length) {
-    const poleGeo = new THREE.CylinderGeometry(0.07, 0.1, 1, 5);
-    const headGeo = new THREE.SphereGeometry(0.22, 6, 5);
+    const poleGeo = poleGeometry();
+    const headGeo = lampHeadGeometry();
     const poles = new THREE.InstancedMesh(poleGeo, lib.pole, lamps.length);
     const heads = new THREE.InstancedMesh(headGeo, lib.head, lamps.length);
+    poles.userData.blockBatch = "instance";
+    poles.userData.batchGroup = "dressing";
+    heads.userData.blockBatch = "instance";
+    heads.userData.batchGroup = "dressing";
     const dummy = new THREE.Object3D();
     lamps.forEach((p, i) => {
       dummy.position.set(p.x, p.y + 4, p.z);
@@ -196,14 +203,15 @@ export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMater
     poles.instanceMatrix.needsUpdate = true;
     heads.instanceMatrix.needsUpdate = true;
     group.add(poles, heads);
-    geometries.push(poleGeo, headGeo);
     instanced.push(poles, heads);
   }
 
-  const props = roofProps(buildings, quality === "high" ? 120 : 40);
+  const props = roofProps(buildings, budget.props);
   if (props.tanks.length) {
-    const geo = new THREE.CylinderGeometry(0.55, 0.55, 0.7, 8);
+    const geo = tankGeometry();
     const mesh = new THREE.InstancedMesh(geo, lib.tank, props.tanks.length);
+    mesh.userData.blockBatch = "instance";
+    mesh.userData.batchGroup = "dressing";
     const dummy = new THREE.Object3D();
     props.tanks.forEach((t, i) => {
       dummy.position.set(t.x, t.y + 0.4, t.z);
@@ -214,12 +222,13 @@ export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMater
     });
     mesh.instanceMatrix.needsUpdate = true;
     group.add(mesh);
-    geometries.push(geo);
     instanced.push(mesh);
   }
   if (props.antennas.length) {
-    const geo = new THREE.CylinderGeometry(0.03, 0.04, 1, 4);
+    const geo = antennaGeometry();
     const mesh = new THREE.InstancedMesh(geo, lib.antenna, props.antennas.length);
+    mesh.userData.blockBatch = "instance";
+    mesh.userData.batchGroup = "dressing";
     const dummy = new THREE.Object3D();
     props.antennas.forEach((a, i) => {
       dummy.position.set(a.x, a.y + a.h / 2, a.z);
@@ -230,7 +239,6 @@ export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMater
     });
     mesh.instanceMatrix.needsUpdate = true;
     group.add(mesh);
-    geometries.push(geo);
     instanced.push(mesh);
   }
 
@@ -240,7 +248,7 @@ export function buildDressing(chunk: ChunkFile, shops: ShopRec[], lib: CityMater
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(segs, 3));
     cables = new THREE.LineSegments(geo, lib.cable);
-    cables.visible = quality === "high";
+    cables.visible = budget.cables;
     group.add(cables);
     geometries.push(geo);
   }
