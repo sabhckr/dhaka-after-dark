@@ -46,6 +46,11 @@ for (const [name, [x, z]] of Object.entries(POINTS)) {
   let transitions = 0;
   let carSeconds = 0;
   let movingSeconds = 0;
+  let metres = 0;
+  let jump = 0;
+  const pos = new Map<number, [number, number]>();
+  const still = new Map<number, number>();
+  let longestStill = 0;
   for (let t = 0; t < SECONDS; t += DT) {
     sim.tick(DT, { x, z });
     const live = new Set<number>();
@@ -56,6 +61,16 @@ for (const [name, [x, z]] of Object.entries(POINTS)) {
       last.set(car.id, { held: car.held, edge: car.edge, d: Math.hypot(car.x - x, car.z - z) });
       carSeconds += DT;
       if (car.speed > 0.5) movingSeconds += DT;
+      const was = pos.get(car.id);
+      if (was) {
+        const d = Math.hypot(car.x - was[0], car.z - was[1]);
+        metres += d;
+        jump = Math.max(jump, d);
+      }
+      pos.set(car.id, [car.x, car.z]);
+      const held = car.speed < 0.5 ? (still.get(car.id) ?? 0) + DT : 0;
+      still.set(car.id, held);
+      longestStill = Math.max(longestStill, held);
     }
     for (const [id, prev] of last) {
       if (live.has(id)) continue;
@@ -64,6 +79,8 @@ for (const [name, [x, z]] of Object.entries(POINTS)) {
       else if (prev.held === "blocked") gone.blocked++;
       else gone.other++;
       last.delete(id);
+      pos.delete(id);
+      still.delete(id);
     }
   }
   const perMin = (n: number) => +(n / (SECONDS / 60)).toFixed(1);
@@ -72,6 +89,10 @@ for (const [name, [x, z]] of Object.entries(POINTS)) {
     spawns: sim.spawns,
     avgCars: +(carSeconds / SECONDS).toFixed(1),
     movingShare: +(movingSeconds / Math.max(1e-9, carSeconds)).toFixed(3),
+    // Mean speed over all car time, and the largest one-frame move (a jump means a snap).
+    metresPerCarSecond: +(metres / Math.max(1e-9, carSeconds)).toFixed(2),
+    largestFrameMoveM: +jump.toFixed(2),
+    longestStandstillS: +longestStill.toFixed(1),
     junctionTransitionsPerMin: perMin(transitions),
     vanishPerMin: { deadEnd: perMin(gone["dead-end"]), blocked: perMin(gone.blocked), other: perMin(gone.other) },
     outOfRangePerMin: perMin(gone["out of range"]),

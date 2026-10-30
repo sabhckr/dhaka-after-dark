@@ -18,6 +18,7 @@ LAYERS = ["buildings", "water", "canals", "parks", "rails", "plazas", "bridges",
 DRIVE_CLASS = {"primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link",
                "residential", "unclassified", "service", "living_street"}
 VEHICLE_CLASS = DRIVE_CLASS | {"motorway", "motorway_link", "trunk", "trunk_link"}
+SIM_MIN_EDGE_M = 0.01  # src/traffic/sim.ts chain()
 
 # ---------- UTM 46N forward (Snyder), local origin of the project ----------
 A, F = 6378137.0, 1 / 298.257223563
@@ -186,11 +187,12 @@ class Side:
             s = sorted(Counter(tfind(n) for n in list(tp)).values(), reverse=True)
             return len(s), (round(s[0] / len(tp), 4) if s else 0)
 
-        short = sum(1 for (p, _w, _ix, _iy, cls) in self.edges.values() if cls in DRIVE_CLASS and sum(
-            math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]) for i in range(0, len(p) - 2, 2)) < 8)
+        drive_len = [sum(math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]) for i in range(0, len(p) - 2, 2))
+                     for (p, _w, _ix, _iy, cls) in self.edges.values() if cls in DRIVE_CLASS]
         veh_n, veh_share = subnet(lambda cls, length: cls in VEHICLE_CLASS)
-        # what TrafficSim loads: its drive classes, and only edges of 8 m or more (src/traffic/sim.ts chain())
-        sim_n, sim_share = subnet(lambda cls, length: cls in DRIVE_CLASS and length >= 8)
+        # what TrafficSim loads: its drive classes, every edge of 1 cm or more (src/traffic/sim.ts chain()).
+        # Edges under 8 m are driven through without a stop line.
+        sim_n, sim_share = subnet(lambda cls, length: cls in DRIVE_CLASS and length >= SIM_MIN_EDGE_M)
         return {
             "nodes": len(self.nodes),
             "edges": len(self.edges),
@@ -202,7 +204,8 @@ class Side:
             "isolated_nodes_degree_0": isolated_nodes,
             "vehicle_network_components": veh_n,
             "vehicle_network_largest_share_of_its_nodes": veh_share,
-            "sim_drive_edges_dropped_lt_8m": short,
+            "sim_drive_edges_dropped_lt_1cm": sum(1 for v in drive_len if v < SIM_MIN_EDGE_M),
+            "sim_drive_edges_without_stop_line_lt_8m": sum(1 for v in drive_len if SIM_MIN_EDGE_M <= v < 8),
             "sim_network_components": sim_n,
             "sim_network_largest_share_of_its_nodes": sim_share,
             "dead_ends": len(dead),

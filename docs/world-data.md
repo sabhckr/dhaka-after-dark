@@ -71,8 +71,8 @@ Produced by `python3 -I scripts/geo/validate-world.py public/world <staged> <rep
 | Non-finite or null coordinates | 0 | 0 | 0 | |
 | Bridge edges with both ends in the largest component | 1,597 of 1,970 | 2,124 of 2,294 | +527 | Expected improvement |
 | Vehicle network: largest component, share of its nodes | 73.3 % (4,921 components) | 99.6 % (58 components) | +26.3 pts | Expected improvement |
-| Network the traffic sim loads: largest component, share of its nodes | 64.4 % (5,668 components) | 90.8 % (905 components) | +26.4 pts | Expected improvement. The gap to 99.6 % is the sim's 8 m filter, a traffic limit (see below) |
-| Drive-class edges shorter than 8 m, which the sim drops | 2,299 | 4,499 | +2,200 | Expected: roads now split at real junctions |
+| Network the traffic sim loads: largest component, share of its nodes | 64.4 % (5,668 components) | 90.8 % (905 components) | +26.4 pts | Expected improvement. The gap to 99.6 % was the sim's 8 m filter, removed later by T1: 97.38 %, 258 components (`docs/traffic.md`) |
+| Drive-class edges shorter than 8 m, which the sim dropped until T1 | 2,299 | 4,499 | +2,200 | Expected: roads now split at real junctions |
 | Road pieces | 40,316 | 40,316 | 0 | Same pieces, same attributes |
 | Road vertices | 172,696 | 187,071 | +14,375 | Expected: pinned junction vertices |
 | Buildings | 519,573 | 519,573 | 0 | Identical in every chunk |
@@ -85,7 +85,7 @@ How the three connectivity shares are computed (each is the largest connected co
 
 - **Largest component, share of nodes:** every graph edge of every class and length. The denominator is all 58,673 graph nodes.
 - **Vehicle network:** only edges whose class is in the sim's 10 drive classes (`primary`, `secondary` and `tertiary` with their links, `residential`, `unclassified`, `service`, `living_street`) plus `trunk`, `motorway` and their links. The edges may be any length. The denominator is the nodes those edges touch.
-- **Network the traffic sim loads:** exactly what `TrafficSim.setChunk` keeps, meaning the 10 drive classes and edges of 8 m or more. The denominator is the nodes those edges touch.
+- **Network the traffic sim loads:** exactly what `TrafficSim.setChunk` kept at integration, meaning the 10 drive classes and edges of 8 m or more. The denominator is the nodes those edges touch. Since T1 the sim keeps edges of 1 cm or more, and the validator measures that.
 
 An earlier version of this table gave 66.0 % → 92.6 % as "graph a car can drive". That figure counted every class, footways included, with all graph nodes as the denominator. It did not describe a vehicle network and has been replaced by the two rows above.
 
@@ -214,11 +214,9 @@ Afterwards, run `python3 -I scripts/geo/validate-world.py <old> public/world <re
 ## Limits that remain
 
 - Elevation is not modelled. Bridge and flyover heights come from tags or class defaults, not from a DEM or survey.
-- The traffic sim skips edges shorter than 8 m.
-  - 5,172 graph edges are that short. 4,499 of them are in the sim's drive classes, and 1,105 of those are on primary, secondary or tertiary roads or their links.
-  - The filter leaves 4,069 nodes of the drive network outside the sim's largest component. The nearest major-road node to Kawran Bazar and to Shahbagh is among them.
-  - This is a traffic-system limit to fix in the sim, not in the data.
+- ~~The traffic sim skips edges shorter than 8 m.~~ Fixed by T1 (2026-10-30, `docs/traffic.md`): the sim keeps every drive edge of 1 cm or more, and its net is the whole drive-class network (97.38 % of nodes in the largest part).
 - Cars still vanish at dead ends.
+- Every node with three or more links is a signal on one global phase. T1 raised the number of such nodes near the probe points by 10 to 19 %, and that costs up to 4 points of moving share.
 - Trunk and motorway roads are not in the traffic class list.
 - Footbridge and footway networks are mostly not joined to the road graph in OSM.
 - 5 pairs of OSM ways have identical geometry. Both copies are kept, as in the source.
