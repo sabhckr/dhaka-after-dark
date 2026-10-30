@@ -42,8 +42,10 @@ Vertical stack (blockout, not a survey): parks 0.05 m, water 0.12 m, canals 0.14
 ## Generate
 
 ```bash
-node --max-old-space-size=3072 --experimental-strip-types scripts/geo/generate.ts data/raw/bangladesh.osm.pbf
+WORLD_OUT=<staging folder> node --max-old-space-size=3072 --experimental-strip-types scripts/geo/generate.ts data/raw/bangladesh.osm.pbf
 ```
+
+The generator writes schema v2 by default (`WORLD_SCHEMA=1` for v1; see [docs/world-schema-v2.md](docs/world-schema-v2.md)). It refuses to write into `public/world` unless `WORLD_WRITE_PUBLIC=1` is set. Shipped data is replaced only after a staged run is checked and approved ([docs/world-data.md](docs/world-data.md)).
 
 Outputs:
 

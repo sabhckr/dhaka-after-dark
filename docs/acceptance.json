@@ -21,6 +21,7 @@
     { "id": "audio", "name": "City audio", "status": "NOT STARTED", "note": "No licensed ambience bed yet." },
     { "id": "p0-harness", "name": "Golden views and A/B timing (P0)", "status": "INTEGRATED", "note": "scripts/look: 27 fixed views (3 districts x street/medium/aerial x day/night/rain), pixel compare, alternated A/B against docs/budgets.json. Two runs of one build: 27 of 27 the same. M1 Air only." },
     { "id": "p1-streaming", "name": "Streaming without long frames, far ring (P1)", "status": "INTEGRATED", "note": "M1 Air, 3 alternated rounds x2: teleport worst frame 517 -> 52 ms and 389 -> 44 ms, p99 under 50 ms, ring loaded in 0.8 s. Far ring to 3.25 km on High; day fog still hides most of it beyond 2.5 km. No workers. Not measured on a reference PC." },
+    { "id": "p2-world-v2", "name": "World data schema v2 (P2)", "status": "STAGED", "note": "Generator, validation, compat layer and runtime rules are on dev/engine-core. A staged v2 run passes the schema diff (all 1,298 v1 chunks byte-equal through toV1) and the raw OSM check (70,277 attributed features match, points within 7 mm). Golden views are identical, and the in-game A/B shows no cost. public/world is still v1; the swap waits for approval (docs/p2-record.md)." },
     { "id": "perf-90", "name": "90 FPS on a high-end PC", "status": "BLOCKED", "note": "No high-end GPU in this workspace. The last software-GPU Dhanmondi window was not 30 FPS." }
   ]
 }
