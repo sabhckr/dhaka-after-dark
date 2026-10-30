@@ -6,18 +6,16 @@ import { parseChunkKey, worldToChunk } from "@/geo/chunks";
 import { lonLatToWorld, worldToLonLat } from "@/geo/crs";
 import { indexEdges, nearestRoad, type RoadIndex } from "@/geo/graph";
 import type { ShopRec } from "@/geo/shops";
-import { ChunkScheduler, releaseChunkResources, type ReleaseBag } from "@/geo/streaming";
 import type { ChunkFile, Manifest, Spawn } from "@/geo/types";
-import { validateChunk } from "@/geo/validate";
 import { applyLook } from "@/viewer/fly";
 import { createActor, placeOnGround, stepActor, type RideMode } from "@/viewer/actor";
-import { SolidWorld, solidsFromChunk } from "@/viewer/solids";
+import { SolidWorld } from "@/viewer/solids";
 import { composeWeather, WEATHER_ORDER, weatherLabel, type WeatherId } from "@/viewer/weather";
 import { GRADE, PALETTE } from "@/viewer/grade";
 import { buildDressing, type Dressing } from "@/viewer/dressing";
 import { LOOKS, LOOK_ORDER, easeLook, lerpLook, type LookId } from "@/viewer/looks";
 import { createCityMaterials, loadBanglaFont } from "@/viewer/materials";
-import { buildChunkObjects, buildFarMass, labelFromHit, retileBuildings } from "@/viewer/meshes";
+import { labelFromHit, retileBuildings } from "@/viewer/meshes";
 import { BlockBatches } from "@/viewer/block-batch";
 import { pixelRatioCap, selectBuildingLod, treesHidden, type BuildingLod, type RenderQuality } from "@/viewer/lod";
 import { installViceGrade } from "@/viewer/post";
@@ -25,9 +23,8 @@ import { banglaHasInk } from "@/viewer/posters";
 import { mountIntegratedAssets } from "@/assets/street";
 import { createCityLife, type CityLife } from "@/npc/runtime";
 import { createCityTraffic } from "@/traffic/view";
-import { FarRing } from "@/engine/far-ring";
-import { IntegrationQueue } from "@/engine/integrate";
-import { censusScene, createFrameProbe, createStageTimer } from "@/viewer/perf";
+import { createChunkPipeline, type ChunkPipeline } from "@/engine/chunk-pipeline";
+import { censusScene, createFrameProbe, type StageRow } from "@/viewer/perf";
 import { farPropsHidden } from "@/viewer/detail";
 
 type Overview = {
@@ -98,11 +95,11 @@ declare global {
       renderer: () => string;
       memory: () => { jsHeapUsed?: number; jsHeapTotal?: number } | null;
       /** Chunk streaming cost by stage since the last reset. */
-      loads: () => ReturnType<typeof stages.report>;
+      loads: () => Record<string, StageRow>;
       /** Fetched chunks still waiting to be joined into the scene. */
       queued: () => number;
       /** Far-ring cells, merged blocks and triangles. */
-      far: () => ReturnType<FarRing["stats"]> & { queued: number };
+      far: () => ReturnType<ChunkPipeline["farStats"]>;
       pause: (value: boolean) => void;
       halt: () => void;
       resume: () => void;
@@ -131,47 +128,8 @@ function makeRenderer(mount: HTMLDivElement) {
   return renderer;
 }
 
-/** Per-frame time for joining streamed chunks into the scene, collision and graphs. */
-const INTEGRATE_MS = 6;
-/** Per-frame time for far-ring work, spent only once the streamed ring has nothing queued. */
-const FAR_MS = 3;
-/** Streamed ring radius in chunks (5x5). The far ring starts outside it. */
-const LOAD_RADIUS = 2;
 /** Seconds of travel the streamer looks ahead when choosing what to fetch next. */
 const LEAD_S = 2.5;
-
-/** Far-ring outer radius in chunks: 6 reaches 3.25 km from the centre of the camera's chunk. */
-function farOuter(q: RenderQuality): number {
-  return q === "high" ? 6 : q === "medium" ? 4 : LOAD_RADIUS;
-}
-
-/**
- * Smallest footprint the far ring keeps, by distance. Most Dhaka footprints are
- * under 100 m²; keeping every one from 1.25 to 3.25 km out drew about 1.07M
- * triangles around Kawran, so small ones drop out first where fog is thickest.
- */
-function farMinArea(dist: number): number {
-  return dist <= 3 ? 60 : dist === 4 ? 100 : dist === 5 ? 160 : 250;
-}
-
-/** Chunk streaming cost by stage, read by window.__perf.loads(). */
-const stages = createStageTimer();
-
-async function fetchChunk(ix: number, iy: number): Promise<ChunkFile | null> {
-  const res = await fetch(`/world/chunks/c_${ix}_${iy}.json`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Chunk ${ix}_${iy} failed (${res.status})`);
-  let data: unknown;
-  const text = await res.text();
-  try {
-    data = stages.time("parse", () => JSON.parse(text));
-  } catch {
-    throw new Error(`Chunk ${ix}_${iy} is corrupt JSON`);
-  }
-  const problems = stages.time("validate", () => validateChunk(data));
-  if (problems.length) throw new Error(`Chunk ${ix}_${iy}: ${problems[0]}`);
-  return data as ChunkFile;
-}
 
 export function WorldView() {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -305,9 +263,6 @@ export function WorldView() {
       scene.add(rain);
       const blocks = new BlockBatches();
       scene.add(blocks.root);
-      const chunkFiles = new Set(manifest.chunks.map((c) => c.key));
-      const exists = (ix: number, iy: number) => chunkFiles.has(`${ix}_${iy}`);
-      const farQueue = new IntegrationQueue();
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
       const spawnOf = (id: string): Spawn => manifest.spawns.find((s) => s.id === id) || manifest.spawns[0];
@@ -346,7 +301,25 @@ export function WorldView() {
       timer.connect(document);
 
       const held = new Set<string>();
-      const bags = new Map<string, ReleaseBag & { group: THREE.Group; counts: Record<string, number> }>();
+      const pipeline = createChunkPipeline({
+        scene,
+        lib,
+        solids,
+        life,
+        traffic,
+        blocks,
+        chunkKeys: manifest.chunks.map((c) => c.key),
+        quality: () => qualityRef.current,
+        onError: (message) => {
+          errors.push(message);
+          if (errors.length > 6) errors.shift();
+        },
+        onChange: (_key, change) => {
+          if (change === "in") stages.time("props", () => paintProps(scheduler.focus.ix, scheduler.focus.iy));
+          edgeDirty = true;
+        },
+      });
+      const { bags, scheduler, farRing, stages } = pipeline;
       let detailCell = { ix: Number.NaN, iy: Number.NaN };
       const paintProps = (ix: number, iy: number) => {
         for (const [key, bag] of bags) {
@@ -393,7 +366,7 @@ export function WorldView() {
         lib.setQuality(q);
         life.setQuality(q);
         traffic.setQuality(q);
-        farRing.setOuter(farOuter(q));
+        pipeline.setQuality(q);
         renderer.setPixelRatio(pixelRatioCap(q, window.devicePixelRatio || 1));
         renderer.setSize(mount.clientWidth || 1, mount.clientHeight || 1);
         for (const [key, bag] of bags) {
@@ -457,148 +430,6 @@ export function WorldView() {
         edgeIndex = indexEdges(edges, 90);
         edgeDirty = false;
       };
-
-      let signKeys: Set<string> | null = null;
-      const knownSigns = async () => {
-        if (signKeys) return signKeys;
-        signKeys = new Set();
-        try {
-          const res = await fetch("/world/signs/index.json");
-          if (res.ok) {
-            const data = (await res.json()) as { chunkKeys?: string[] };
-            for (const key of data.chunkKeys || []) signKeys.add(key);
-          }
-        } catch {
-          /* no sign index */
-        }
-        return signKeys;
-      };
-
-      // Bumped on every load and unload. A build that finishes for an older
-      // generation is thrown away, so an unload + reload during the signs fetch
-      // cannot leave two copies of one chunk in the scene.
-      const chunkGen = new Map<string, number>();
-      // Chunk work waits here and runs a few milliseconds per frame (see IntegrationQueue).
-      const integration = new IntegrationQueue();
-      const live = (key: string, gen: number) => !dead && scheduler.loaded.has(key) && chunkGen.get(key) === gen;
-      const bumpGen = (key: string) => {
-        const next = (chunkGen.get(key) ?? 0) + 1;
-        chunkGen.set(key, next);
-        return next;
-      };
-      const farRing = new FarRing({
-        inner: LOAD_RADIUS,
-        outer: farOuter(qualityRef.current),
-        exists,
-        fetchChunk,
-        build: (chunk, dist) => stages.time("far-build", () => buildFarMass(chunk, lib.surfaces, farMinArea(dist))),
-        enqueue: (task) => farQueue.push(task),
-        nearReady: (key) => bags.has(key),
-      });
-      scene.add(farRing.root);
-      const scheduler = new ChunkScheduler({
-        exists,
-        loadRadius: LOAD_RADIUS,
-        unloadRadius: 4,
-        maxConcurrent: 3,
-        fetchChunk,
-        onLoad: (key, ix, iy, data) => {
-          const gen = bumpGen(key);
-          if (!data) return;
-          const chunk = data as ChunkFile;
-          integration.push(() => {
-            if (!live(key, gen)) return;
-            try {
-              stages.time("collision", () => solids.setChunk(key, solidsFromChunk(chunk).bucket));
-              stages.time("pedestrian-graph", () => life.onChunk(key, chunk));
-              stages.time("traffic", () => traffic.onChunk(key, chunk));
-            } catch (err) {
-              errors.push(`${key}: ${err instanceof Error ? err.message : "collision"}`);
-            }
-          });
-          void (async () => {
-            let shops: ShopRec[] = [];
-            const keys = await knownSigns();
-            if (keys.has(`${ix}_${iy}`)) {
-              try {
-                const res = await fetch(`/world/signs/c_${ix}_${iy}.json`);
-                if (res.ok) {
-                  const json: unknown = await res.json();
-                  if (Array.isArray(json)) shops = json as ShopRec[];
-                }
-              } catch {
-                /* optional sidecar */
-              }
-            }
-            if (!live(key, gen)) return;
-            integration.push(() => {
-              if (!live(key, gen)) return;
-              let built: ReturnType<typeof buildChunkObjects>;
-              try {
-                const dist = Math.max(Math.abs(ix - scheduler.focus.ix), Math.abs(iy - scheduler.focus.iy));
-                const lod = selectBuildingLod(dist, qualityRef.current);
-                built = stages.time("meshes", () => buildChunkObjects(chunk, lib.surfaces, lod));
-                const dress = stages.time("dressing", () => buildDressing(chunk, shops, lib, qualityRef.current));
-                built.group.add(dress.group);
-                built.geometries.push(...dress.geometries);
-                built.instanced.push(...dress.instanced);
-                const group = built.group;
-                stages.time("batch-absorb", () =>
-                  blocks.absorb(key, ix, iy, group, {
-                    trees: !treesHidden(dist, qualityRef.current),
-                    dressing: !farPropsHidden(dist),
-                    rails: true,
-                  }),
-                );
-                built.instanced = built.instanced.filter((mesh) => (mesh as THREE.Object3D).parent != null);
-                built.group.userData.chunk = chunk;
-                built.group.userData.shops = shops;
-                built.group.userData.dress = dress;
-                built.group.userData.dressQuality = qualityRef.current;
-              } catch (err) {
-                errors.push(`${key}: ${err instanceof Error ? err.message : "mesh"}`);
-                if (errors.length > 6) errors.shift();
-                return;
-              }
-              if (dead || !scheduler.loaded.has(key) || chunkGen.get(key) !== gen) {
-                blocks.drop(key);
-                releaseChunkResources(built);
-                return;
-              }
-              scene.add(built.group);
-              bags.set(key, {
-                ...built,
-                counts: {
-                  roads: chunk.roads.length,
-                  buildings: chunk.buildings.length,
-                  water: chunk.water.length + chunk.canals.length,
-                  parks: chunk.parks.length,
-                  trees: chunk.trees.length,
-                },
-              });
-              stages.time("props", () => paintProps(scheduler.focus.ix, scheduler.focus.iy));
-              edgeDirty = true;
-            });
-          })();
-        },
-        onUnload: (key) => stages.time("unload", () => {
-          bumpGen(key);
-          life.onUnload(key);
-          traffic.onUnload(key);
-          solids.deleteChunk(key);
-          const bag = bags.get(key);
-          if (!bag) return;
-          blocks.drop(key);
-          scene.remove(bag.group);
-          releaseChunkResources(bag);
-          bags.delete(key);
-          edgeDirty = true;
-        }),
-        onError: (key, err) => {
-          errors.push(`${key}: ${err.message}`);
-          if (errors.length > 6) errors.shift();
-        },
-      });
 
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2(0, 0);
@@ -741,8 +572,8 @@ export function WorldView() {
           stages.reset();
         },
         loads: () => stages.report(),
-        queued: () => integration.size,
-        far: () => ({ ...farRing.stats(), queued: farQueue.size }),
+        queued: () => pipeline.queued,
+        far: () => pipeline.farStats(),
         summary: () => probe.summary(),
         census: () => censusScene(scene),
         batches: () => blocks.stats(),
@@ -894,8 +725,7 @@ export function WorldView() {
         lastX = fly.x;
         lastZ = fly.z;
         const lead = worldToChunk(fly.x + velX * LEAD_S, fly.z + velZ * LEAD_S, manifest.chunkSize);
-        scheduler.update(here.ix, here.iy, lead);
-        farRing.update(here.ix, here.iy);
+        pipeline.update(here, lead);
         if (here.ix !== detailCell.ix || here.iy !== detailCell.iy) {
           detailCell = here;
           paintProps(here.ix, here.iy);
@@ -914,8 +744,7 @@ export function WorldView() {
           stages.time("lod-retile", () => retileBuildings(bag, chunk, lib.surfaces, next));
           retiled = true;
         }
-        integration.run(INTEGRATE_MS, (err) => errors.push(`integrate: ${err instanceof Error ? err.message : String(err)}`));
-        if (integration.size === 0) farQueue.run(FAR_MS, (err) => errors.push(`far ring: ${err instanceof Error ? err.message : String(err)}`));
+        pipeline.run();
         const renderT0 = performance.now();
         renderer.render(scene, camera);
         probe.noteRender(performance.now() - renderT0);
@@ -1011,17 +840,13 @@ export function WorldView() {
 
       stop = () => {
         renderer.setAnimationLoop(null);
-        scheduler.dispose();
-        integration.clear();
-        farRing.dispose();
-        farQueue.clear();
+        pipeline.dispose();
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keyup", onKey);
         window.removeEventListener("blur", onBlur);
         window.removeEventListener("mousemove", onMouse);
         miniRef.current?.removeEventListener("click", onMini);
         observer.disconnect();
-        for (const bag of bags.values()) releaseChunkResources(bag);
         bags.clear();
         blocks.dispose();
         yard.dispose();
