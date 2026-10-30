@@ -145,7 +145,7 @@ Still on the main thread, and the likely source of the remaining 0.9–1 s stall
 
 ## 2026-10-30 P1: streaming without long frames, far ring
 
-Machine and method as above (M1 Air 8 GB, ANGLE Metal, headless Chrome, 60 Hz cap), with 2.4 GB of swap in use. `npm run perf:ab` alternated build A (the P0 commit `cfcc122`, game code as `30a1ada`) and build B (this branch) for 3 rounds, twice. Figures are medians over rounds; the second run, after the code moved into `src/engine/`, is shown.
+Machine and method as above (M1 Air 8 GB, ANGLE Metal, headless Chrome, 60 Hz cap), with 2.4 GB of swap in use. `npm run perf:ab` alternated build A (the P0 commit `a6b8b10`, game code as `6f320b0`) and build B (this branch) for 3 rounds, twice. Figures are medians over rounds; the second run, after the code moved into `src/engine/`, is shown.
 
 | | A: P0 | B: P1 |
 | --- | --- | --- |

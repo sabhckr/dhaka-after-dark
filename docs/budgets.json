@@ -2,7 +2,7 @@
   "//": "Performance budgets checked by scripts/look/perf-ab.mjs against build B. Reference machine A: Apple M1 MacBook Air 8 GB, Chrome headless, ANGLE Metal, 60 Hz cap. Budgets are for that machine; they are not claims about any other hardware.",
   "referenceMachine": "Apple M1 MacBook Air, 8 GB RAM, Chrome (ANGLE Metal), 60 Hz",
   "ringLoad": {
-    "//": "Frame gaps from a long teleport until 2 s after the 5x5 ring finished loading. Baseline 30a1ada: worst 728-1193 ms, p99 230-288 ms.",
+    "//": "Frame gaps from a long teleport until 2 s after the 5x5 ring finished loading. Baseline 6f320b0: worst 728-1193 ms, p99 230-288 ms.",
     "maxMs": 100,
     "p99Ms": 50
   },

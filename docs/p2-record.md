@@ -1,19 +1,19 @@
 # P2 world data v2: running record
 
-Branch `dev/engine-core` in the worktree `~/Documents/dhaka-after-dark-p1`. Nothing is pushed or merged. Every regeneration wrote to a staging folder. `public/world` was changed once, by the approved swap in 6ee2f27, from the validated staging copy.
+Branch `dev/engine-core` in the worktree `~/Documents/dhaka-after-dark-p1`. Nothing is pushed or merged. Every regeneration wrote to a staging folder. `public/world` was changed once, by the approved swap in 4284b9a, from the validated staging copy.
 
 ## Status (2026-10-30)
 
 | Part | State | Evidence |
 |---|---|---|
 | Audit of v1 data and generator | Done | Section "Audit" below |
-| Schema v2 types, OSM extraction, generator | Done | 18a6169, 8d88223 |
-| Validation, compatibility layer, runtime rules | Done | 18a6169 |
-| Migration tooling (diff, OSM check, swap list, benchmark) | Done | 8d88223, 3137e57, docs commit |
+| Schema v2 types, OSM extraction, generator | Done | 9cf8267, 173f747 |
+| Validation, compatibility layer, runtime rules | Done | 9cf8267 |
+| Migration tooling (diff, OSM check, swap list, benchmark) | Done | 173f747, b8ef5ae, docs commit |
 | Tests | 18 in `world-v2.test.ts`, all game tests pass | `npm test` TS suite: 136 of 136 after the swap |
 | Staged regeneration and checks | Done, all pass | Section "Verification" |
 | Benchmarks, old against new | Done | Section "Benchmarks" |
-| Replacing `public/world` with v2 | Done after approval, 6ee2f27 | Section "Swap" |
+| Replacing `public/world` with v2 | Done after approval, 4284b9a | Section "Swap" |
 | Rendering anything from v2 | Not started; P3, P4 and P6 work | |
 
 ## Audit
@@ -30,14 +30,16 @@ See `docs/world-schema-v2.md`. In short: additive only, OSM-only data with a sou
 
 ## Commits
 
+Before the first push, all 24 unpushed commits were rewritten from a machine-generated author address to the GitHub noreply identity. Trees, dates and messages are unchanged, and the hashes in these docs are the rewritten ones. The originals are in the local branches `backup/dev-foundation-pre-rewrite` and `backup/dev-engine-core-pre-rewrite`.
+
 | Commit | Content |
 |---|---|
-| 18a6169 | v2 types, OSM tag extraction, v2 assembly, validation, `compat.ts`, `infer.ts`, generator schema switch and write guard, 16 tests |
-| 8d88223 | `diff-schema.ts`, `dump-osm-sample.ts`, `check-v2-osm.py`; two parser bugs fixed |
-| d5e8e14 | Type error in `dump-osm-sample.ts`. 8d88223 was committed with it: the typecheck output went through a pipe that hid its exit code |
-| 3137e57 | Dev-only `?world=stage` switch, `/world-stage/` middleware, `bench-format.ts` |
-| ef37a7d | `swap-plan.mjs`, `p2-swap-plan.tsv`, `world-schema-v2.md`, this record |
-| 6ee2f27 | The swap: `public/world` is v2; two pre-swap v1 chunks kept as test fixtures |
+| 9cf8267 | v2 types, OSM tag extraction, v2 assembly, validation, `compat.ts`, `infer.ts`, generator schema switch and write guard, 16 tests |
+| 173f747 | `diff-schema.ts`, `dump-osm-sample.ts`, `check-v2-osm.py`; two parser bugs fixed |
+| 48a8fbb | Type error in `dump-osm-sample.ts`. 173f747 was committed with it: the typecheck output went through a pipe that hid its exit code |
+| b8ef5ae | Dev-only `?world=stage` switch, `/world-stage/` middleware, `bench-format.ts` |
+| b0edd97 | `swap-plan.mjs`, `p2-swap-plan.tsv`, `world-schema-v2.md`, this record |
+| 4284b9a | The swap: `public/world` is v2; two pre-swap v1 chunks kept as test fixtures |
 
 ## Verification
 
@@ -76,7 +78,7 @@ All runs used the 2026-10-28 extract (`data/raw/bangladesh.osm.pbf`, MD5 `0e9db3
 | `building:levels="5th Floor"` (an address note) was stored as 5 levels | the raw OSM check | v2 reads only plain counts |
 | Levels in Bangla digits (`২`, `৮`, `৯`) were dropped: JavaScript `\d` matches ASCII only | the raw OSM check, full run | v2 numeric fields convert Bangla digits |
 | A compatibility test compared `.length` of an object, so it checked nothing | review of the first test run | it now compares the full collision bucket |
-| 8d88223 was committed with a type error | the next typecheck | d5e8e14 |
+| 173f747 was committed with a type error | the next typecheck | 48a8fbb |
 
 ## Benchmarks
 
@@ -133,7 +135,7 @@ Every budget in `docs/budgets.json` passes for B. The differences are within the
 - **Coverage.** OSM coverage is thin for every field (6 % of buildings have levels, 5.7 % of roads have lanes). v2 does not fill the gaps. That is what the labelled rules are for.
 - **Staging copy.** The validated copy is at `~/Documents/dhaka-after-dark-staging/world-v2-2026-10-30`, with `SHA256SUMS` and the reports from its checks (`diff-final.json`, `geo-check-all.json`, `bench-format.json`, the generator log). The scratchpad copies under `/private/tmp` are not durable.
 
-## Swap (done 2026-10-30, commit 6ee2f27)
+## Swap (done 2026-10-30, commit 4284b9a)
 
 Approved by the user ("Approve the swap") and run as planned below, on `dev/engine-core` only. Not pushed.
 
@@ -200,11 +202,11 @@ Generator-owned total: 91.58 MB → 94.30 MB (+3.0 %). Its `SHA256SUMS` lists al
 **Risks.**
 
 - **Git history.** The swap changes about 93 MB of chunk files, and the shipped v1 data stays in history. The estimate made here before the swap (roughly 23 MB compressed) was too high. Measured with `git pack-objects` after the swap: the swap commit packs to 3.9 MB because v2 only appends to each chunk, a push of `dev/engine-core` sends 6.6 MB in all (23 commits, including `dev/foundation`), and a full clone grows from 52.4 to 56.1 MB.
-- **Old builds.** A build older than 18a6169 rejects v2 chunks ("unsupported chunk version"). Code and data deploy together from one commit, so this matters only for a stale cached bundle meeting new data. The chunk URLs are not versioned.
+- **Old builds.** A build older than 9cf8267 rejects v2 chunks ("unsupported chunk version"). Code and data deploy together from one commit, so this matters only for a stale cached bundle meeting new data. The chunk URLs are not versioned.
 - **Load cost.** 5 more chunk files are fetched near the city edge. Validation costs about 0.04 ms more per chunk, and a fully parsed city takes 13 % more heap.
 - **Nothing visible changes.** Golden views are identical. Any later renderer change that uses v2 fields is separate work.
 
 **Rollback.**
 
 - Before the commit: `git restore --source=HEAD --staged --worktree public/world`, then move the 6 added files to the Trash with `/usr/bin/trash`. Nothing else needs undoing.
-- After the commit (now): `git revert 6ee2f27^..HEAD`, while nothing else sits on top. It reverts newest first: the licence and docs fix, e99363f, then the swap, so the docs never claim v2 data and no revert conflicts. The swap and the docs commits touch no file in common and the runtime code is unchanged since ef37a7d, so this returns the tree to ef37a7d exactly, a state that passed every check. Once pushed, revert; never force-push.
+- After the commit (now): `git revert 4284b9a^..HEAD`, while nothing else sits on top. It reverts newest first: the licence and docs fix, 5064051, then the swap, so the docs never claim v2 data and no revert conflicts. The swap and the docs commits touch no file in common and the runtime code is unchanged since b0edd97, so this returns the tree to b0edd97 exactly, a state that passed every check. Once pushed, revert; never force-push.

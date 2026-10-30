@@ -42,10 +42,10 @@ All runs used `node --max-old-space-size=3072 --experimental-strip-types`. Each 
 | Run | Code | Wall time | Max RSS | Peak footprint | Swaps | Exit |
 |---|---|---|---|---|---|---|
 | Reproduction of shipped data | `main` c534279 | 139 s | 1.35 GB | 1.87 GB | 0 | 0 |
-| Stage A: pinned simplification | f47d490 | 141 s | 1.31 GB | 1.88 GB | 0 | 0 |
+| Stage A: pinned simplification | f2ee24d | 141 s | 1.31 GB | 1.88 GB | 0 | 0 |
 | Stage B: plus 1 cm node ids, unique edge ids | uncommitted | 127 s | 1.36 GB | 2.38 GB | 0 | 0 |
 | Stage C: plus stub merge | uncommitted | 118 s | 1.48 GB | 1.99 GB | 0 | 0 |
-| **Final** | **9037ea4** | **122 s** | **1.56 GB** | **2.23 GB** | **0** | **0** |
+| **Final** | **4c54d07** | **122 s** | **1.56 GB** | **2.23 GB** | **0** | **0** |
 
 The final run is identical to stage C apart from `generatedAt`, so the generator is deterministic for a given commit and extract. Peak footprint stayed under the 3 GB heap cap in every run. No run swapped.
 
@@ -140,9 +140,9 @@ The metro corridor point measures roads only. The Line 6 viaduct is not in the d
 
 `node --experimental-strip-types scripts/traffic-probe.ts <world> <label>` runs the game's `TrafficSim` on the same 5 × 5 chunk ring the game loads, at the High cap of 14 vehicles, with a seeded RNG, for 600 simulated seconds at 60 Hz. The point is the parked player position.
 
-The first run of the regenerated graph exposed a signal livelock in the sim. Cars on a bending approach flipped between red and green every frame, and the sim pulled them back to the stop line. Shahbagh jammed, with the moving share falling from 0.997 to 0.517. The same bug was already costing Jatrabari on the shipped data. Fixed in c0890b7, with a test that fails on the old sim.
+The first run of the regenerated graph exposed a signal livelock in the sim. Cars on a bending approach flipped between red and green every frame, and the sim pulled them back to the stop line. Shahbagh jammed, with the moving share falling from 0.997 to 0.517. The same bug was already costing Jatrabari on the shipped data. Fixed in 897dba7, with a test that fails on the old sim.
 
-With c0890b7:
+With 897dba7:
 
 | Point | Data | Driveable edges | Moving share | Junction crossings / min | Dead-end vanishes / min | Vanishes per 100 crossings |
 |---|---|---|---|---|---|---|
@@ -163,11 +163,11 @@ Cars cross 1.1 to 2.0 times as many junctions. The moving share is a few points 
 
 ### In the game
 
-The stage worktree (`~/Documents/dhaka-after-dark-stage`, detached at c0890b7, `public/world` replaced by the staged files, `signs/` and `assets/` kept) builds with `npm run build` (exit 0). In the dev server the HUD showed `errors none` at the Sangsad spawn (25 chunks loaded) and after teleporting to Kawran Bazar (30 chunks loaded, 12 cars, 3 holding at a signal).
+The stage worktree (`~/Documents/dhaka-after-dark-stage`, detached at 897dba7, `public/world` replaced by the staged files, `signs/` and `assets/` kept) builds with `npm run build` (exit 0). In the dev server the HUD showed `errors none` at the Sangsad spawn (25 chunks loaded) and after teleporting to Kawran Bazar (30 chunks loaded, 12 cars, 3 holding at a signal).
 
 ### Streaming
 
-`node scripts/bench-stream.mjs <url> <out.json> 45 <label>`: headless installed Chrome, ANGLE Metal on the Apple M1, 1600 × 900, High quality, flying north from Motijheel at 40 m/s for 45 s (1.8 km). The display caps it at 60 Hz. Same code (c0890b7), shipped and staged data served side by side, runs alternated.
+`node scripts/bench-stream.mjs <url> <out.json> 45 <label>`: headless installed Chrome, ANGLE Metal on the Apple M1, 1600 × 900, High quality, flying north from Motijheel at 40 m/s for 45 s (1.8 km). The display caps it at 60 Hz. Same code (897dba7), shipped and staged data served side by side, runs alternated.
 
 | Data | Run | Avg FPS | Median | p95 | p99 | Max | Frames > 50 ms | > 250 ms | Time in > 50 ms frames | Errors |
 |---|---|---|---|---|---|---|---|---|---|---|

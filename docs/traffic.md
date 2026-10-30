@@ -20,7 +20,7 @@ With every edge of 1 cm or more kept, the sim net is the whole drive-class netwo
 
 Closing those links also closed small loops. The first measured build trapped cars in them: at Shahbagh six cars lapped a 39 m service ring (way 951474238, whose fourth part is 2.4 m) and stood in a stack for up to 454 s. Motijheel and Jatrabari showed the same. The edge trail above fixed that. Each fix has a test that fails without it.
 
-`scripts/traffic-probe.ts` on `public/world`, 600 simulated seconds, seeded, High cap. Before is c0890b7, after is T1:
+`scripts/traffic-probe.ts` on `public/world`, 600 simulated seconds, seeded, High cap. Before is 897dba7, after is T1:
 
 | Point | Driveable edges | Moving share | Mean speed m/s | Longest standstill s | Dead-end vanishes / min | Largest one-frame move m |
 |---|---|---|---|---|---|---|
