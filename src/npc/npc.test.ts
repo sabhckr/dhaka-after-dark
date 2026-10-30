@@ -439,3 +439,79 @@ test("an idle civilian beside the tea pitch browses instead of every passer queu
   for (let i = 0; i < 12; i++) pop.tick(0.1);
   assert.equal(guest.state, "SHOPPING");
 });
+
+function streetAt(dx: number, dz: number): ChunkFile {
+  const pts = [2 + dx, dz, 40 + dx, dz, 80 + dx, dz];
+  return chunk({
+    roads: [{ id: 1, cls: "residential", w: 5, we: false, y: 0, bridge: false, pts: [2 + dx, dz, 80 + dx, dz] }],
+    graph: { nodes: [], edges: [{ id: `e${dx}_${dz}`, a: "a", b: "b", way: 1, cls: "residential", oneway: 0, pts }] },
+  });
+}
+
+function graphOf(nav: PedNav): string {
+  const nodes: string[] = [];
+  for (let i = 0; i < nav.nodeCount; i++) {
+    const n = nav.node(i)!;
+    nodes.push(`${n.key}:${n.walk ? "w" : ""}${n.road ? "r" : ""}`);
+  }
+  return `${nodes.join(",")}|${nav.linkCount}|${nav.stats().walk}|${nav.stats().road}`;
+}
+
+test("joining chunks one by one gives the graph a rebuild gives, also after unload and replace", () => {
+  const a = streetAt(0, 0);
+  const b = streetAt(78, 0); // shares the x=80 end with a, so the graphs stitch
+  const c = streetAt(0, 40);
+  const live = new PedNav();
+  live.setChunk("a", a);
+  live.setChunk("b", b);
+  live.setChunk("c", c);
+  live.deleteChunk("b");
+  live.setChunk("b", b);
+  live.setChunk("c", streetAt(0, 44));
+  live.flush();
+  const fresh = new PedNav();
+  fresh.setChunk("a", a);
+  fresh.setChunk("c", streetAt(0, 44));
+  fresh.setChunk("b", b);
+  assert.equal(graphOf(live), graphOf(fresh));
+});
+
+test("after an unload the old graph answers queries until the replacement is swapped in", () => {
+  const nav = new PedNav();
+  for (let i = 0; i < 6; i++) nav.setChunk(`k${i}`, streetAt(0, i * 30));
+  const before = nav.stats().nodes;
+  const v0 = nav.version;
+  nav.deleteChunk("k5");
+  assert.equal(nav.pending, true);
+  assert.equal(nav.stats().nodes, before, "live graph changed before the swap");
+  assert.equal(nav.version, v0);
+  let calls = 0;
+  let swapped = false;
+  while (!swapped && calls < 1000) {
+    swapped = nav.step(0);
+    calls++;
+  }
+  assert.ok(swapped);
+  assert.ok(calls > 1, "a zero budget should still need several steps");
+  assert.equal(nav.pending, false);
+  assert.ok(nav.stats().nodes < before);
+  assert.equal(nav.version, v0 + 1);
+  const fresh = new PedNav();
+  for (let i = 0; i < 5; i++) fresh.setChunk(`k${i}`, streetAt(0, i * 30));
+  assert.equal(graphOf(nav), graphOf(fresh));
+});
+
+test("streamed walkers anchored in an unloaded chunk leave once the new graph is in", () => {
+  const { pop } = worldWith(street());
+  pop.onChunk("d", streetAt(0, 60));
+  const npc = pop.spawnAgent("cleaner", 18, 56.5)!;
+  const anchor = pop.nav.walkNodesNear(18, 56.5, 8)[0];
+  assert.ok(anchor);
+  npc.chunk = "stream";
+  npc.anchorKey = anchor.key;
+  pop.onUnload("d");
+  assert.ok(pop.npcs.includes(npc), "removed before the graph changed");
+  for (let i = 0; i < 40 && pop.nav.pending; i++) pop.tick(0.05);
+  assert.equal(pop.nav.pending, false);
+  assert.ok(!pop.npcs.includes(npc), "walker anchored in the unloaded chunk is still alive");
+});

@@ -58,14 +58,26 @@ type Node = {
 
 type Link = { to: number; kind: LinkKind; len: number };
 
-type CellMap = Map<string, number[]>;
+/** Unblocked runs of one chain, in build order. Consecutive points in a run are linked. */
+type Run = { kind: LinkKind; pts: Array<[number, number]> };
 
-function cellKey(x: number, z: number): string {
-  return `${Math.floor(x / CELL)}_${Math.floor(z / CELL)}`;
+type CellMap = Map<number, number[]>;
+
+// Grid cells and snap keys as numbers: string keys made most of the join cost.
+// Both indices stay far inside +/-OFF for any city-sized coordinate.
+const OFF = 1 << 20;
+const SPAN = 1 << 21;
+
+function pairId(a: number, b: number): number {
+  return (a + OFF) * SPAN + (b + OFF);
 }
 
-function snapKey(x: number, z: number): string {
-  return `${Math.round(x / SNAP)}_${Math.round(z / SNAP)}`;
+function cellId(x: number, z: number): number {
+  return pairId(Math.floor(x / CELL), Math.floor(z / CELL));
+}
+
+function snapId(x: number, z: number): number {
+  return pairId(Math.round(x / SNAP), Math.round(z / SNAP));
 }
 
 function resample(pts: number[], step: number): Array<[number, number]> {
@@ -140,7 +152,7 @@ type Blocker = (x: number, z: number) => boolean;
 
 function blockerFor(chunk: ChunkFile): Blocker {
   const buildings: { minX: number; maxX: number; minZ: number; maxZ: number; outer: number[] }[] = [];
-  const grid = new Map<string, number[]>();
+  const grid = new Map<number, number[]>();
   for (const building of chunk.buildings) {
     if (building.outer.length < 6) continue;
     let minX = Infinity;
@@ -157,7 +169,7 @@ function blockerFor(chunk: ChunkFile): Blocker {
     buildings.push({ minX, maxX, minZ, maxZ, outer: building.outer });
     for (let x = minX; x <= maxX + 0.01; x += CELL) {
       for (let z = minZ; z <= maxZ + 0.01; z += CELL) {
-        const key = cellKey(x, z);
+        const key = cellId(x, z);
         const list = grid.get(key);
         if (list) list.push(index);
         else grid.set(key, [index]);
@@ -166,7 +178,7 @@ function blockerFor(chunk: ChunkFile): Blocker {
   }
   const water = chunk.water.filter((poly) => poly.outer.length >= 6);
   return (x, z) => {
-    const list = grid.get(cellKey(x, z));
+    const list = grid.get(cellId(x, z));
     if (list) {
       for (const index of list) {
         const box = buildings[index];
@@ -196,52 +208,238 @@ function kindCost(kind: LinkKind): number {
   return 1;
 }
 
-export class PedNav {
-  version = 0;
-  private readonly chunks = new Map<string, ChunkFile>();
-  private nodes: Node[] = [];
-  private adj: Link[][] = [];
-  private keyTo = new Map<string, number>();
-  private cells: CellMap = new Map();
-  private walkIds: number[] = [];
-  private roadIds: number[] = [];
+/**
+ * Everything about one chunk's contribution that does not depend on other
+ * chunks: resampling, sidewalk offsets, foot bridges and the building, water,
+ * canal and rail tests. This is the expensive part, so it runs once per chunk;
+ * joining runs into the shared graph is cheap and is what a rebuild repeats.
+ */
+export function planChunk(chunk: ChunkFile): Run[] {
+  const runs: Run[] = [];
+  const blocked = blockerFor(chunk);
+  const addChain = (pts: Array<[number, number]>, kind: LinkKind) => {
+    let run: Array<[number, number]> = [];
+    for (const p of pts) {
+      if (blocked(p[0], p[1])) {
+        if (run.length) runs.push({ kind, pts: run });
+        run = [];
+        continue;
+      }
+      run.push(p);
+    }
+    if (run.length) runs.push({ kind, pts: run });
+  };
+  const elevated = new Set<number>();
+  for (const road of chunk.roads) {
+    if (road.bridge && road.y >= 2.5 && !FOOT.has(road.cls)) elevated.add(road.id);
+    const plan = planFootBridge(road, chunk.origin);
+    if (!plan) continue;
+    addChain(resample(plan.deckPts, 6), "foot");
+    for (const stair of plan.stairs) addChain(resample(stair.pts, 2.5), "foot");
+  }
+  for (const edge of chunk.graph.edges) {
+    if (edge.pts.length < 4) continue;
+    if (elevated.has(edge.way)) continue;
+    if (BANNED.has(edge.cls) || /rail|tram|subway|monorail/.test(edge.cls)) continue;
+    const sampled = resample(edge.pts, edge.cls === "steps" ? 3 : 8);
+    if (sampled.length < 2) continue;
+    if (FOOT.has(edge.cls)) {
+      addChain(sampled, edge.cls === "living_street" ? "sidewalk" : "foot");
+      continue;
+    }
+    if (!ROAD.has(edge.cls)) continue;
+    addChain(sampled, "road");
+    const half = (HIGHWAY_WIDTH_M[edge.cls] ?? 5.5) / 2 + 1.05;
+    const left = offsetChain(sampled, half, 1);
+    const right = offsetChain(sampled, half, -1);
+    addChain(left, "sidewalk");
+    addChain(right, "sidewalk");
+    for (let i = 0; i < sampled.length; i += 2) {
+      if (blocked(left[i][0], left[i][1]) || blocked(right[i][0], right[i][1])) continue;
+      runs.push({ kind: "crossing", pts: [left[i], right[i]] });
+    }
+  }
+  return runs;
+}
 
-  setChunk(key: string, chunk: ChunkFile): void {
-    this.chunks.set(key, chunk);
-    this.rebuild();
+/** One built graph. PedNav keeps the live one and, after an unload, a replacement under construction. */
+class Graph {
+  nodes: Node[] = [];
+  adj: Link[][] = [];
+  keyTo = new Map<number, number>();
+  cells: CellMap = new Map();
+  walkIds: number[] = [];
+  roadIds: number[] = [];
+
+  join(runs: Run[], from = 0, to = runs.length): void {
+    for (let r = from; r < to; r++) {
+      const run = runs[r];
+      let prev = -1;
+      for (const [x, z] of run.pts) {
+        const index = this.nodeAt(x, z, run.kind);
+        if (prev >= 0 && prev !== index) this.link(prev, index, run.kind);
+        prev = index;
+      }
+    }
+  }
+
+  index(): void {
+    this.walkIds = [];
+    this.roadIds = [];
+    for (let i = 0; i < this.nodes.length; i++) {
+      if (this.nodes[i].walk && (this.adj[i]?.length ?? 0) > 0) this.walkIds.push(i);
+      if (this.nodes[i].road && (this.adj[i]?.length ?? 0) > 0) this.roadIds.push(i);
+    }
+  }
+
+  private nodeAt(x: number, z: number, kind: LinkKind): number {
+    const id = snapId(x, z);
+    let index = this.keyTo.get(id);
+    if (index == null) {
+      index = this.nodes.length;
+      const key = `${Math.round(x / SNAP)}_${Math.round(z / SNAP)}`;
+      this.nodes.push({ x, z, key, walk: false, road: false });
+      this.adj.push([]);
+      this.keyTo.set(id, index);
+      const cell = cellId(x, z);
+      const list = this.cells.get(cell);
+      if (list) list.push(index);
+      else this.cells.set(cell, [index]);
+    }
+    const node = this.nodes[index];
+    if (kind === "road") node.road = true;
+    else node.walk = true;
+    return index;
+  }
+
+  private link(a: number, b: number, kind: LinkKind): void {
+    const len = Math.hypot(this.nodes[a].x - this.nodes[b].x, this.nodes[a].z - this.nodes[b].z);
+    if (len < 0.4) return;
+    const row = this.adj[a];
+    if (!row.some((link) => link.to === b && link.kind === kind)) row.push({ to: b, kind, len });
+    const back = this.adj[b];
+    if (!back.some((link) => link.to === a && link.kind === kind)) back.push({ to: a, kind, len });
+  }
+}
+
+/**
+ * Joins the loaded chunks' runs in Map order. A new chunk is joined onto the
+ * live graph at once, which gives the same graph as a rebuild because Map
+ * order puts it last. Removing or replacing a chunk starts a replacement graph
+ * that `step` builds a few milliseconds per frame while queries keep using the
+ * live one; it is swapped in when complete, and `version` changes. Until then
+ * the live graph still holds the removed chunk's nodes.
+ */
+export class PedNav {
+  private revision = 0;
+  private readonly chunks = new Map<string, Run[]>();
+  private live = new Graph();
+  private next: { graph: Graph; keys: Iterator<string>; key: string | null; run: number } | null = null;
+
+  setChunk(key: string, chunk: ChunkFile, runs: Run[] = planChunk(chunk)): void {
+    const replaced = this.chunks.has(key);
+    this.chunks.set(key, runs);
+    if (replaced) {
+      this.restart();
+      return;
+    }
+    // A pending replacement reaches this key too: Map iterators visit entries added after they started.
+    this.live.join(runs);
+    this.live.index();
+    this.revision++;
   }
 
   deleteChunk(key: string): void {
     if (!this.chunks.delete(key)) return;
-    this.rebuild();
+    this.restart();
+  }
+
+  /** True while a replacement graph is being built. */
+  get pending(): boolean {
+    return this.next !== null;
+  }
+
+  /**
+   * Builds the pending replacement for up to `budgetMs` and swaps it in when it
+   * is complete. Returns true on the call that swapped.
+   */
+  step(budgetMs: number): boolean {
+    const job = this.next;
+    if (!job) return false;
+    const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const until = now() + budgetMs;
+    for (;;) {
+      if (job.key === null) {
+        const it = job.keys.next();
+        if (it.done) break;
+        job.key = it.value;
+        job.run = 0;
+      }
+      const runs = this.chunks.get(job.key);
+      if (!runs) {
+        job.key = null;
+        continue;
+      }
+      const to = Math.min(runs.length, job.run + 48);
+      job.graph.join(runs, job.run, to);
+      job.run = to;
+      if (job.run >= runs.length) job.key = null;
+      if (now() >= until) return false;
+    }
+    job.graph.index();
+    this.live = job.graph;
+    this.next = null;
+    this.revision++;
+    return true;
+  }
+
+  /** Finishes any pending replacement now. */
+  flush(): void {
+    while (this.next) this.step(Infinity);
+  }
+
+  private restart(): void {
+    if (this.chunks.size === 0) {
+      this.next = null;
+      this.live = new Graph();
+      this.revision++;
+      return;
+    }
+    this.next = { graph: new Graph(), keys: this.chunks.keys(), key: null, run: 0 };
+  }
+
+  /** Changes whenever the live graph changes; walkers holding an older path re-plan. */
+  get version(): number {
+    return this.revision;
   }
 
   get nodeCount(): number {
-    return this.nodes.length;
+    return this.live.nodes.length;
   }
 
   get linkCount(): number {
     let n = 0;
-    for (const row of this.adj) n += row.length;
+    for (const row of this.live.adj) n += row.length;
     return n / 2;
   }
 
   stats(): { nodes: number; links: number; chunks: number; walk: number; road: number } {
     return {
-      nodes: this.nodes.length,
+      nodes: this.live.nodes.length,
       links: this.linkCount,
       chunks: this.chunks.size,
-      walk: this.walkIds.length,
-      road: this.roadIds.length,
+      walk: this.live.walkIds.length,
+      road: this.live.roadIds.length,
     };
   }
 
   node(index: number): Node | undefined {
-    return this.nodes[index];
+    return this.live.nodes[index];
   }
 
   hasAnchor(key: string): boolean {
-    return this.keyTo.has(key);
+    const cut = key.indexOf("_");
+    return cut > 0 && this.live.keyTo.has(pairId(Number(key.slice(0, cut)), Number(key.slice(cut + 1))));
   }
 
   nearest(x: number, z: number, mode: MoveMode, max = 24): number | null {
@@ -252,10 +450,10 @@ export class PedNav {
     const cz = Math.floor(z / CELL);
     for (let ix = cx - reach; ix <= cx + reach; ix++) {
       for (let iz = cz - reach; iz <= cz + reach; iz++) {
-        const list = this.cells.get(`${ix}_${iz}`);
+        const list = this.live.cells.get(pairId(ix, iz));
         if (!list) continue;
         for (const index of list) {
-          const node = this.nodes[index];
+          const node = this.live.nodes[index];
           if (mode === "road" ? !node.road : !node.walk) continue;
           const d = Math.hypot(node.x - x, node.z - z);
           if (d < bestD) {
@@ -277,14 +475,14 @@ export class PedNav {
     const to = this.nearest(gx, gz, mode, 22);
     if (from == null || to == null) return null;
     if (from === to) {
-      const node = this.nodes[from];
+      const node = this.live.nodes[from];
       return [
         { x, z, kind: mode === "road" ? "road" : "sidewalk" },
         { x: node.x, z: node.z, kind: mode === "road" ? "road" : "sidewalk" },
         { x: gx, z: gz, kind: mode === "road" ? "road" : "sidewalk" },
       ];
     }
-    const goal = this.nodes[to];
+    const goal = this.live.nodes[to];
     const gScore = new Map<number, number>([[from, 0]]);
     const prev = new Map<number, { id: number; kind: LinkKind }>();
     const open: number[] = [from];
@@ -296,7 +494,7 @@ export class PedNav {
       let bestF = Infinity;
       for (let i = 0; i < open.length; i++) {
         const id = open[i];
-        const node = this.nodes[id];
+        const node = this.live.nodes[id];
         const f = (gScore.get(id) ?? 0) + Math.hypot(node.x - goal.x, node.z - goal.z);
         if (f < bestF) {
           bestF = f;
@@ -312,7 +510,7 @@ export class PedNav {
       closed.add(current);
       expanded++;
       const base = gScore.get(current) ?? 0;
-      for (const link of this.adj[current] ?? []) {
+      for (const link of this.live.adj[current] ?? []) {
         if (!allows(link.kind, mode)) continue;
         const next = base + link.len * kindCost(link.kind);
         if (next >= (gScore.get(link.to) ?? Infinity)) continue;
@@ -325,13 +523,13 @@ export class PedNav {
     const out: PathPoint[] = [];
     let cursor = to;
     const stack: PathPoint[] = [];
-    stack.push({ x: this.nodes[to].x, z: this.nodes[to].z, kind: "sidewalk" });
+    stack.push({ x: this.live.nodes[to].x, z: this.live.nodes[to].z, kind: "sidewalk" });
     while (cursor !== from) {
       const step = prev.get(cursor);
       if (!step) return null;
       stack[stack.length - 1].kind = step.kind;
       cursor = step.id;
-      stack.push({ x: this.nodes[cursor].x, z: this.nodes[cursor].z, kind: step.kind });
+      stack.push({ x: this.live.nodes[cursor].x, z: this.live.nodes[cursor].z, kind: step.kind });
     }
     while (stack.length) out.push(stack.pop()!);
     out.push({ x: gx, z: gz, kind: out[out.length - 1]?.kind ?? "sidewalk" });
@@ -339,13 +537,13 @@ export class PedNav {
   }
 
   pickDest(x: number, z: number, mode: MoveMode, seed: number, min = 16, max = 72): { x: number; z: number } | null {
-    const ids = mode === "road" ? this.roadIds : this.walkIds;
+    const ids = mode === "road" ? this.live.roadIds : this.live.walkIds;
     if (!ids.length) return null;
     const choices: number[] = [];
     const start = seed % ids.length;
     for (let n = 0; n < ids.length && choices.length < 24; n++) {
       const index = ids[(start + n * 7) % ids.length];
-      const node = this.nodes[index];
+      const node = this.live.nodes[index];
       const d = Math.hypot(node.x - x, node.z - z);
       if (d >= min && d <= max) choices.push(index);
     }
@@ -354,16 +552,16 @@ export class PedNav {
       let bestD = Infinity;
       for (let n = 0; n < Math.min(ids.length, 40); n++) {
         const index = ids[(start + n) % ids.length];
-        const d = Math.hypot(this.nodes[index].x - x, this.nodes[index].z - z);
+        const d = Math.hypot(this.live.nodes[index].x - x, this.live.nodes[index].z - z);
         if (d > 4 && d < bestD) {
           bestD = d;
           best = index;
         }
       }
       if (bestD === Infinity) return null;
-      return { x: this.nodes[best].x, z: this.nodes[best].z };
+      return { x: this.live.nodes[best].x, z: this.live.nodes[best].z };
     }
-    const pick = this.nodes[choices[seed % choices.length]];
+    const pick = this.live.nodes[choices[seed % choices.length]];
     return { x: pick.x, z: pick.z };
   }
 
@@ -374,105 +572,15 @@ export class PedNav {
     const cz = Math.floor(z / CELL);
     for (let ix = cx - reach; ix <= cx + reach; ix++) {
       for (let iz = cz - reach; iz <= cz + reach; iz++) {
-        const list = this.cells.get(`${ix}_${iz}`);
+        const list = this.live.cells.get(pairId(ix, iz));
         if (!list) continue;
         for (const index of list) {
-          const node = this.nodes[index];
+          const node = this.live.nodes[index];
           if (!node.walk) continue;
           if (Math.hypot(node.x - x, node.z - z) <= radius) out.push(node);
         }
       }
     }
     return out;
-  }
-
-  private rebuild(): void {
-    this.nodes = [];
-    this.adj = [];
-    this.keyTo.clear();
-    this.cells.clear();
-    this.walkIds = [];
-    this.roadIds = [];
-    for (const chunk of this.chunks.values()) this.addChunk(chunk);
-    for (let i = 0; i < this.nodes.length; i++) {
-      if (this.nodes[i].walk && (this.adj[i]?.length ?? 0) > 0) this.walkIds.push(i);
-      if (this.nodes[i].road && (this.adj[i]?.length ?? 0) > 0) this.roadIds.push(i);
-    }
-    this.version++;
-  }
-
-  private addChunk(chunk: ChunkFile): void {
-    const blocked = blockerFor(chunk);
-    const elevated = new Set<number>();
-    for (const road of chunk.roads) {
-      if (road.bridge && road.y >= 2.5 && !FOOT.has(road.cls)) elevated.add(road.id);
-      const plan = planFootBridge(road, chunk.origin);
-      if (!plan) continue;
-      this.addChain(resample(plan.deckPts, 6), "foot", blocked);
-      for (const stair of plan.stairs) this.addChain(resample(stair.pts, 2.5), "foot", blocked);
-    }
-    for (const edge of chunk.graph.edges) {
-      if (edge.pts.length < 4) continue;
-      if (elevated.has(edge.way)) continue;
-      if (BANNED.has(edge.cls) || /rail|tram|subway|monorail/.test(edge.cls)) continue;
-      const sampled = resample(edge.pts, edge.cls === "steps" ? 3 : 8);
-      if (sampled.length < 2) continue;
-      if (FOOT.has(edge.cls)) {
-        this.addChain(sampled, edge.cls === "living_street" ? "sidewalk" : "foot", blocked);
-        continue;
-      }
-      if (!ROAD.has(edge.cls)) continue;
-      this.addChain(sampled, "road", blocked);
-      const half = (HIGHWAY_WIDTH_M[edge.cls] ?? 5.5) / 2 + 1.05;
-      const left = offsetChain(sampled, half, 1);
-      const right = offsetChain(sampled, half, -1);
-      this.addChain(left, "sidewalk", blocked);
-      this.addChain(right, "sidewalk", blocked);
-      for (let i = 0; i < sampled.length; i += 2) {
-        if (blocked(left[i][0], left[i][1]) || blocked(right[i][0], right[i][1])) continue;
-        this.addChain([left[i], right[i]], "crossing", blocked);
-      }
-    }
-  }
-
-  private addChain(pts: Array<[number, number]>, kind: LinkKind, blocked: Blocker): void {
-    let prev = -1;
-    for (const [x, z] of pts) {
-      if (blocked(x, z)) {
-        prev = -1;
-        continue;
-      }
-      const index = this.nodeAt(x, z, kind);
-      if (prev >= 0 && prev !== index) this.link(prev, index, kind);
-      prev = index;
-    }
-  }
-
-  private nodeAt(x: number, z: number, kind: LinkKind): number {
-    const key = snapKey(x, z);
-    let index = this.keyTo.get(key);
-    if (index == null) {
-      index = this.nodes.length;
-      this.nodes.push({ x, z, key, walk: false, road: false });
-      this.adj.push([]);
-      this.keyTo.set(key, index);
-      const cell = cellKey(x, z);
-      const list = this.cells.get(cell);
-      if (list) list.push(index);
-      else this.cells.set(cell, [index]);
-    }
-    const node = this.nodes[index];
-    if (kind === "road") node.road = true;
-    else node.walk = true;
-    return index;
-  }
-
-  private link(a: number, b: number, kind: LinkKind): void {
-    const len = Math.hypot(this.nodes[a].x - this.nodes[b].x, this.nodes[a].z - this.nodes[b].z);
-    if (len < 0.4) return;
-    const row = this.adj[a];
-    if (!row.some((link) => link.to === b && link.kind === kind)) row.push({ to: b, kind, len });
-    const back = this.adj[b];
-    if (!back.some((link) => link.to === a && link.kind === kind)) back.push({ to: a, kind, len });
   }
 }

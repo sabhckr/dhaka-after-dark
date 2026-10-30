@@ -110,3 +110,68 @@ Low at the same 32 chunks cut rendered triangles from 518k to 362k and tree inst
 ### Still expensive
 
 Per-chunk building meshes, pedestrian clones (about eight meshes each), and the 146-mesh asset yard when the Sangsad pad is on screen. A merged building mesh would cut draws and would also shade every off-screen wall. That was left undone on purpose.
+
+## 2026-10-30 hardware GPU, streaming route
+
+First runs on a real GPU. Machine: Apple M1 (MacBook Air, 8 GB), `ANGLE (Apple, ANGLE Metal Renderer: Apple M1)`, installed Google Chrome headless, 1600×900, DPR 1, quality high, day, clear. Headless Chrome is capped at 60 Hz, so the median is the vsync interval. These runs measure **streaming stalls**. They are not a 90 FPS result, and the M1 Air is not the reference PC.
+
+Route: `node scripts/bench-stream.mjs <url> <out.json> 45 <label>`. The camera flies from Motijheel `(6688, 28, -11384)` north at 40 m/s for 45 s (1.8 km, about four chunk rows), so chunks stream the whole time. Frame gaps come from an rAF probe in the page. A and B ran alternately against two dev servers: untouched `main` (c534279) and this branch.
+
+| Build | Avg FPS | p95 | p99 | Max | Frames > 50 ms | > 250 ms | Time in > 50 ms frames |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| main, run 1 | 28.2 | 83 ms | 317 ms | 1183 ms | 116 | 24 | 19.5 s |
+| main, run 2 | 32.4 | 67 ms | 317 ms | 1350 ms | 102 | 21 | 18.1 s |
+| main, run 3 | 36.9 | 50 ms | 217 ms | 1400 ms | 81 | 15 | 14.6 s |
+| branch, run 1 | 49.0 | 17 ms | 133 ms | 933 ms | 36 | 8 | 7.9 s |
+| branch, run 2 | 46.3 | 33 ms | 167 ms | 1050 ms | 51 | 7 | 9.8 s |
+
+No console errors in any run. The end state was 30 chunks loaded, about 97 draws and 518k triangles.
+
+What changed:
+
+- `SolidWorld` indexes each chunk once on load. It used to re-index every loaded chunk on the first query after any change.
+- `BlockBatches.absorb` rebuilds each touched merged mesh once per chunk instead of once per absorbed mesh.
+- The scheduler takes queued chunks nearest first and drops jobs outside the load radius. A fetch that lands beyond the unload radius is discarded.
+- Each chunk build carries a generation number, so an unload and reload during the signs fetch cannot leave two copies of a chunk.
+- Picking raycasts the chunks around the camera and the actors, not every loaded mesh.
+- `solidsFromChunk` is memoised per chunk object. Load used to compute it twice.
+
+Still on the main thread, and the likely source of the remaining 0.9–1 s stalls (not yet profiled one by one):
+
+- JSON parse and validation
+- `buildChunkObjects` and `buildDressing`
+- `PedNav.rebuild` over every loaded chunk, which also clears every NPC path
+- the full `rebuildEdges` road index
+
+## 2026-10-30 P1: streaming without long frames, far ring
+
+Machine and method as above (M1 Air 8 GB, ANGLE Metal, headless Chrome, 60 Hz cap), with 2.4 GB of swap in use. `npm run perf:ab` alternated build A (the P0 commit `a6b8b10`, game code as `6f320b0`) and build B (this branch) for 3 rounds, twice. Figures are medians over rounds; the second run, after the code moved into `src/engine/`, is shown.
+
+| | A: P0 | B: P1 |
+| --- | --- | --- |
+| Teleport to Old Dhaka (8 km): worst frame | 517 ms | 52 ms |
+| same: p99 / p95 | 128 / 73 ms | 45 / 35 ms |
+| same: frames over 100 ms | 4 | 0 |
+| same: ring loaded (no fetch in flight, queue empty) | 1.61 s | 0.82 s |
+| Teleport to Uttara (18 km): worst frame | 389 ms | 44 ms |
+| same: p99 / p95 | 119 / 66 ms | 26 / 20 ms |
+| same: ring loaded | 1.42 s | 0.81 s |
+| Steady median, 3 views | 16.7 ms (vsync) | 16.7 ms (vsync) |
+| Draws at Kawran street / Gulshan aerial | 129 / 103 | 153 / 141 |
+| Triangles drawn, Kawran street / Gulshan aerial | 335k / 381k | 465k / 556k |
+| JS heap, Kawran street | 248 MB | 275 MB |
+
+The first run gave the same picture (worst 552 → 59 ms and 417 → 43 ms; heap 154 → 275 MB at Kawran street in that run). Steady state is at the 60 Hz cap on both builds, so this machine cannot show whether the far ring costs frame time below the cap.
+
+Where the A-side time went, from a CPU profile of a ring load: `PedNav` rebuilt the whole pedestrian graph from every loaded chunk each time one chunk arrived (about 2 s of main-thread time per ring). After the fix the per-stage timer (`window.__perf.loads()`) reads, for one ring of 21-25 chunks: meshes 140-250 ms in total (worst chunk 28 ms), dressing 75-120 ms (worst 17 ms), pedestrian graph 45-56 ms (worst 14 ms), parse 6-8 ms (worst 1.4 ms).
+
+What changed:
+
+- `PedNav` plans a chunk once, joins new chunks in place and builds the replacement after an unload in 3 ms slices. A script compared it with the old code over 101 load and unload steps in three districts: identical graph after every step.
+- Chunk work goes through `IntegrationQueue`, 6 ms a frame.
+- The far ring (`src/engine/far-ring.ts`) draws building masses and water to radius 6 on High: about 290k triangles around Kawran, 3 materials per 3x3 block, built only when the streamed ring is idle (worst 6.5 ms a cell).
+- The scheduler prefetches around a point 2.5 s ahead along recent travel and no longer requests cells that have no chunk file.
+
+Golden views (`npm run look:compare`, P0 against P1): all 9 street views and all medium views are "same". The aerial views differ in the horizon band, where the city now continues instead of ending in a white band 1.25 km out (Kawran aerial day: 29% of the second band changed, under 1.1% anywhere below it). Day fog is still FogExp2 0.00062: at 2.5 km it hides about 91% and at 3 km about 97%, so in practice the visible city ends around 2.5 km. The fog itself was not changed in P1.
+
+Not done in P1: Web Workers (not needed for the budgets, see engine.md); a BVH for picking; a memory cap with LRU unload beyond the existing unload radius.

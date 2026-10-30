@@ -1,7 +1,11 @@
 /**
  * Offline Dhaka blockout generator.
  *
- *   node --max-old-space-size=3072 --experimental-strip-types scripts/geo/generate.ts [pbf]
+ *   WORLD_OUT=<staging dir> node --max-old-space-size=3072 --experimental-strip-types scripts/geo/generate.ts [pbf]
+ *
+ * WORLD_SCHEMA=1 writes the v1 schema; the default is v2 (docs/world-schema-v2.md).
+ * Writing into public/world needs WORLD_WRITE_PUBLIC=1: shipped data is only
+ * replaced after a staged run has been compared and approved (docs/world-data.md).
  *
  * Reads a local Geofabrik (or other ODbL) OSM PBF. Does not download tiles.
  * Heavy work stays here; the browser only fetches chunk JSON.
@@ -12,7 +16,12 @@ import path from "node:path";
 import { assembleWorld, approximateParkTrees, chunkFeatureCounts, type WorldFeature } from "../../src/geo/assemble.ts";
 import { CHUNK_SIZE } from "../../src/geo/chunks.ts";
 import {
+  BUILDING_FIELDS,
   DHAKA_PREFILTER,
+  POINT_TAGS,
+  ROAD_FIELDS,
+  barrierType,
+  buildingAttrs,
   classifyHeight,
   classifyRoad,
   inPrefilter,
@@ -23,13 +32,28 @@ import {
   isPark,
   isRail,
   isWaterArea,
+  landuseType,
   linearWaterWidth,
+  placeKind,
+  pointKind,
+  powerLine,
   railElevation,
+  roadAttrs,
 } from "../../src/geo/classify.ts";
 import { WORLD_ORIGIN, lonLatToWorld, worldToLonLat } from "../../src/geo/crs.ts";
-import { CoverageMask, douglasPeucker, pointInPolys, ringArea, type PolyRings, type XZ } from "../../src/geo/geometry.ts";
+import {
+  CoverageMask,
+  douglasPeucker,
+  douglasPeuckerPinned,
+  pointInPolys,
+  ringArea,
+  vertexKey,
+  type PolyRings,
+  type XZ,
+} from "../../src/geo/geometry.ts";
 import { indexEdges, nearestRoad, type GraphEdge } from "../../src/geo/graph.ts";
-import type { Manifest, Spawn } from "../../src/geo/types.ts";
+import { worldOutRefusal } from "./out-guard.ts";
+import type { BuildingAttrs, ChunkVersion, FieldSource, Manifest, PlaceRec, PointKind, Spawn } from "../../src/geo/types.ts";
 
 const require = createRequire(import.meta.url);
 const parseOSM = require("osm-pbf-parser") as () => NodeJS.ReadWriteStream;
@@ -37,9 +61,14 @@ const polygonClipping = require("polygon-clipping") as {
   intersection: (a: number[][][][], b: number[][][][]) => number[][][][];
 };
 
-const PBF = process.argv[2] || "/workspace/data/raw/bangladesh.osm.pbf";
-const OUT = "/workspace/public/world";
+// Repo-relative, so the README command writes into this checkout (it used to be /workspace).
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const PBF = process.argv[2] || path.join(ROOT, "data/raw/bangladesh.osm.pbf");
+const OUT = path.resolve(process.env.WORLD_OUT || path.join(ROOT, "public/world"));
+const SCHEMA: ChunkVersion = process.env.WORLD_SCHEMA === "1" ? 1 : 2;
+const V2 = SCHEMA === 2;
 const RETRIEVED = "2026-10-29";
+
 
 type Tags = Record<string, string>;
 type WayRec = { id: number; refs: Int32Array; tags: Tags | null };
@@ -88,12 +117,14 @@ function interestingWay(tags: Tags | undefined): boolean {
   if (tags.natural === "water" || tags.natural === "wood" || tags.natural === "tree") return true;
   if (tags.leisure || tags.landuse) return true;
   if (tags.man_made === "bridge" || tags.man_made === "viaduct") return true;
+  if (V2 && (barrierType(tags) || powerLine(tags))) return true;
   return false;
 }
 
 function featureRelation(tags: Tags): boolean {
   if (relKind(tags)) return true;
   if (isBuilding(tags) || isWaterArea(tags) || isPark(tags) || isBridgeDeck(tags)) return true;
+  if (V2 && landuseType(tags)) return true;
   return false;
 }
 
@@ -412,6 +443,9 @@ function simplifyRing(ring: XZ[], tol: number): XZ[] {
 
 async function main() {
   if (!fs.existsSync(PBF)) throw new Error(`PBF not found: ${PBF}`);
+  const refusal = worldOutRefusal(OUT, ROOT, process.env);
+  if (refusal) throw new Error(refusal);
+  log(`schema v${SCHEMA} → ${OUT}`);
   log(`pass 1 relations ← ${PBF}`);
   const relations: RelRec[] = [];
   const memberWays = new Set<number>();
@@ -430,6 +464,8 @@ async function main() {
   const wayById = new Map<number, WayRec>();
   const landmarks: { id: number; name: string; cat: string; lon: number; lat: number }[] = [];
   const trees: { lon: number; lat: number }[] = [];
+  const points: { id: number; k: PointKind; lon: number; lat: number; ct?: string; nm?: string }[] = [];
+  const places: { id: number; kind: string; name: string; nameEn?: string; lon: number; lat: number }[] = [];
   let nodeCount = 0;
   let waySeen = 0;
   let sorted = false;
@@ -444,6 +480,20 @@ async function main() {
       else if (tags) {
         const cat = isLandmarkNode(tags);
         if (cat && landmarks.length < 6000) landmarks.push({ id: item.id, name: tags.name, cat, lon: item.lon, lat: item.lat });
+      }
+      if (V2 && tags) {
+        const k = pointKind(tags);
+        if (k) {
+          const p: (typeof points)[number] = { id: item.id, k, lon: item.lon, lat: item.lat };
+          if (k === "crossing" && tags.crossing) p.ct = tags.crossing.trim().toLowerCase().slice(0, 40);
+          if ((k === "bus_stop" || k === "platform") && tags.name) p.nm = tags.name.trim().slice(0, 80);
+          points.push(p);
+        }
+        const place = placeKind(tags);
+        if (place) {
+          const nameEn = tags["name:en"]?.trim();
+          places.push({ id: item.id, kind: place, name: tags.name.trim(), ...(nameEn && nameEn !== tags.name ? { nameEn } : {}), lon: item.lon, lat: item.lat });
+        }
       }
       if (nodes.n % 1_000_000 === 0) log(`nodes in prefilter ${nodes.n}`);
       return;
@@ -570,11 +620,18 @@ async function main() {
   const inside = (x: number, z: number) => pointInPolys(x, z, boundaryPolys);
 
   const consumed = new Set<number>();
+  const landuseMembers = new Set<number>();
   const features: WorldFeature[] = [];
   let clippedPolys = 0;
   let dropped = 0;
 
-  function pushPolys(kind: "building" | "water" | "park" | "plaza" | "bridge", id: number, polys: PolyRings[], extra?: { h: number; hs: "measured" | "estimated" }) {
+  function pushPolys(
+    kind: "building" | "water" | "park" | "plaza" | "bridge" | "landuse",
+    id: number,
+    polys: PolyRings[],
+    extra?: { h: number; hs: "measured" | "estimated"; attrs?: BuildingAttrs },
+    landuse?: string,
+  ) {
     const clipped = clipPolys(polys, boundaryMP, mask);
     if (!clipped.length) {
       dropped++;
@@ -585,7 +642,8 @@ async function main() {
       const outer = simplifyRing(p.outer, 0.35);
       const holes = p.holes.map((h) => simplifyRing(h, 0.35)).filter((h) => h.length >= 3);
       if (outer.length < 3 || ringArea(outer) < 1) continue;
-      if (kind === "building" && extra) features.push({ kind, id, h: extra.h, hs: extra.hs, outer, holes });
+      if (kind === "building" && extra) features.push({ kind, id, h: extra.h, hs: extra.hs, outer, holes, attrs: extra.attrs });
+      else if (kind === "landuse" && landuse) features.push({ kind, id, t: landuse, outer, holes });
       else if (kind === "water") features.push({ kind, id, outer, holes });
       else if (kind === "park") features.push({ kind, id, outer, holes });
       else if (kind === "plaza") features.push({ kind, id, outer, holes });
@@ -606,7 +664,7 @@ async function main() {
     let used = false;
     if (isBuilding(tags) && tags.building !== "part") {
       const h = classifyHeight(tags);
-      pushPolys("building", rel.id, polys, { h: h.metres, hs: h.source });
+      pushPolys("building", rel.id, polys, { h: h.metres, hs: h.source, attrs: V2 ? buildingAttrs(tags) : undefined });
       used = true;
     } else if (isWaterArea(tags)) {
       pushPolys("water", rel.id, polys);
@@ -617,9 +675,39 @@ async function main() {
     } else if (isBridgeDeck(tags)) {
       pushPolys("bridge", rel.id, polys);
       used = true;
+    } else if (V2 && landuseType(tags)) {
+      // Not `used`: v1 must see exactly the ways it saw before. Only the v2
+      // landuse pass skips the member ways, so an area is not drawn twice.
+      pushPolys("landuse", rel.id, polys, undefined, landuseType(tags)!);
+      for (const m of rel.members) if (m.type === "way") landuseMembers.add(m.id);
     }
     if (used) for (const m of rel.members) if (m.type === "way") consumed.add(m.id);
   }
+
+  // Road vertices used by two or more road ways are junctions. Simplification
+  // must keep them, or a T whose node is collinear on the through road loses the
+  // shared vertex and the graph splits there.
+  const roadNodeUse = new Map<number, number>();
+  for (const way of ways) {
+    if (consumed.has(way.id) || !way.tags || way.tags.building === "part" || isBuilding(way.tags)) continue;
+    const road = classifyRoad(way.tags);
+    if (!road || road.area) continue;
+    const seen = new Set<number>();
+    for (const ix of way.refs) {
+      if (ix < 0 || seen.has(ix)) continue;
+      seen.add(ix);
+      roadNodeUse.set(ix, (roadNodeUse.get(ix) || 0) + 1);
+    }
+  }
+  const junctionKeys = new Set<string>();
+  for (const [ix, n] of roadNodeUse) {
+    if (n < 2) continue;
+    const [x, z] = nodes.world(ix);
+    junctionKeys.add(vertexKey(x, z));
+  }
+  roadNodeUse.clear();
+  const isJunction = (p: XZ) => junctionKeys.has(vertexKey(p[0], p[1]));
+  log(`road junction vertices pinned ${junctionKeys.size}`);
 
   const majorRoads: { cls: string; pts: XZ[] }[] = [];
   for (const way of ways) {
@@ -627,7 +715,10 @@ async function main() {
     const tags = way.tags;
     if (!tags) continue;
     if (tags.building === "part") continue;
-    const lines = linesFromRefs(way.refs, nodes).map((l) => douglasPeucker(l, 0.3));
+    const roadLike = !isBuilding(tags) && classifyRoad(tags) != null;
+    const lines = linesFromRefs(way.refs, nodes).map((l) =>
+      roadLike ? douglasPeuckerPinned(l, 0.3, isJunction) : douglasPeucker(l, 0.3),
+    );
     if (isBuilding(tags)) {
       for (const line of lines) {
         if (!closeEnough(line)) {
@@ -635,7 +726,7 @@ async function main() {
           continue;
         }
         const h = classifyHeight(tags);
-        pushPolys("building", way.id, [{ outer: line, holes: [] }], { h: h.metres, hs: h.source });
+        pushPolys("building", way.id, [{ outer: line, holes: [] }], { h: h.metres, hs: h.source, attrs: V2 ? buildingAttrs(tags) : undefined });
       }
       continue;
     }
@@ -672,7 +763,7 @@ async function main() {
           continue;
         }
         for (const part of clipLine(line, inside, grid, mask)) {
-          const pts = douglasPeucker(part, 0.4);
+          const pts = douglasPeuckerPinned(part, 0.4, isJunction);
           if (pts.length < 2) continue;
           features.push({
             kind: "road",
@@ -684,6 +775,7 @@ async function main() {
             bridge: road.bridge,
             oneway: road.oneway,
             pts,
+            attrs: V2 ? roadAttrs(tags) : undefined,
           });
           if (/^(motorway|trunk|primary|secondary|tertiary)/.test(road.cls)) {
             majorRoads.push({ cls: road.cls, pts: douglasPeucker(pts, 10) });
@@ -708,6 +800,29 @@ async function main() {
         for (const part of clipLine(line, inside, grid, mask)) {
           const pts = douglasPeucker(part, 0.6);
           if (pts.length >= 2) features.push({ kind: "rail", id: way.id, y, pts });
+        }
+      }
+      continue;
+    }
+    if (!V2) continue;
+    // Schema v2 layers, reached only by ways v1 drew nothing for.
+    const lu = landuseType(tags);
+    if (lu) {
+      if (!landuseMembers.has(way.id)) {
+        const rings = lines.filter(closeEnough);
+        if (rings.length) pushPolys("landuse", way.id, rings.map((outer) => ({ outer, holes: [] })), undefined, lu);
+      }
+      continue;
+    }
+    const barrier = barrierType(tags);
+    const power = barrier ? null : powerLine(tags);
+    if (barrier || power) {
+      for (const line of lines) {
+        for (const part of clipLine(line, inside, grid, mask)) {
+          const pts = douglasPeucker(part, barrier ? 0.3 : 1);
+          if (pts.length < 2) continue;
+          if (barrier) features.push({ kind: "barrier", id: way.id, t: barrier, pts });
+          else features.push({ kind: "power", id: way.id, t: power!.t, kv: power!.kv, pts });
         }
       }
     }
@@ -743,9 +858,24 @@ async function main() {
     features.push({ kind: "landmark", id: lm.id, name: lm.name, cat: lm.cat, x: w.x, z: w.z });
     landmarkFeatures.push({ ...lm, x: w.x, z: w.z });
   }
-  log(`features ${features.length} dropped ${dropped} clipped ${clippedPolys} trees mapped ${mappedTrees} approx ${approxTrees}`);
+  const placeRecs: PlaceRec[] = [];
+  if (V2) {
+    for (const p of points) {
+      const w = lonLatToWorld(p.lon, p.lat);
+      const cell = mask.cellAt(w.x, w.z);
+      if (cell === 0) continue;
+      if (cell === 2 && !inside(w.x, w.z)) continue;
+      features.push({ kind: "point", id: p.id, k: p.k, x: w.x, z: w.z, ct: p.ct, nm: p.nm });
+    }
+    for (const p of places) {
+      const w = lonLatToWorld(p.lon, p.lat);
+      if (!inside(w.x, w.z)) continue;
+      placeRecs.push({ ...p, x: Math.round(w.x * 100) / 100, z: Math.round(w.z * 100) / 100 });
+    }
+  }
+  log(`features ${features.length} dropped ${dropped} clipped ${clippedPolys} trees mapped ${mappedTrees} approx ${approxTrees} points ${points.length} places ${placeRecs.length}`);
 
-  const assembled = assembleWorld(features, CHUNK_SIZE);
+  const assembled = assembleWorld(features, CHUNK_SIZE, SCHEMA);
   for (const w of assembled.warnings) warn(w);
   log(`chunks ${assembled.chunks.size} buildings ${assembled.counts.buildings} roads ${assembled.counts.roads}`);
 
@@ -860,6 +990,25 @@ async function main() {
     `Prefilter bbox ${DHAKA_PREFILTER.minLat},${DHAKA_PREFILTER.minLon} – ${DHAKA_PREFILTER.maxLat},${DHAKA_PREFILTER.maxLon} only limits the node index. It is not the city boundary.`,
     "Dhaka District and Dhaka Division are larger administrative units and are not the generation extent. The RAJUK Detailed Area Plan boundary was not used.",
   ];
+  if (V2) {
+    gaps.push(
+      "Schema v2 attributes are copied from OSM tags and are absent where OSM has no tag; most buildings and roads have none. Rule-based values (levels from height, sidewalks by road class) are computed at runtime by src/geo/infer.ts and are never written into the data.",
+      "A graph node carries sig or cr only when an OSM signal or crossing node sits on that exact node. Signal nodes on an approach, off the junction vertex, stay in points only.",
+    );
+  }
+  const fields: FieldSource[] = [];
+  if (V2) {
+    const c = assembled.counts;
+    for (const [f, tags] of Object.entries(BUILDING_FIELDS)) fields.push({ field: `buildings.${f}`, src: "osm", tags, count: c[`buildings.${f}`] ?? 0 });
+    for (const [f, tags] of Object.entries(ROAD_FIELDS)) fields.push({ field: `roads.${f}`, src: "osm", tags, count: c[`roads.${f}`] ?? 0 });
+    for (const [k, tags] of Object.entries(POINT_TAGS)) fields.push({ field: `points.${k}`, src: "osm", tags, count: c[`points.${k}`] ?? 0 });
+    fields.push({ field: "landuse", src: "osm", tags: ["landuse", "leisure (non-park)"], count: c.landuse ?? 0 });
+    fields.push({ field: "barriers", src: "osm", tags: ["barrier=wall|fence|retaining_wall|city_wall|hedge"], count: c.barriers ?? 0 });
+    fields.push({ field: "power", src: "osm", tags: ["power=line|minor_line", "voltage"], count: c.power ?? 0 });
+    fields.push({ field: "graph.nodes.sig", src: "osm", tags: ["highway=traffic_signals"], count: c.graphSignals ?? 0 });
+    fields.push({ field: "graph.nodes.cr", src: "osm", tags: ["highway=crossing", "footway=crossing"], count: c.graphCrossings ?? 0 });
+    fields.push({ field: "places", src: "osm", tags: ["place", "name", "name:en"], count: placeRecs.length });
+  }
 
   let minLon = 180;
   let minLat = 90;
@@ -876,7 +1025,7 @@ async function main() {
   }
 
   const manifest: Manifest = {
-    v: 1,
+    v: SCHEMA,
     name: "DHAKA: AFTER DARK",
     generatedAt: new Date().toISOString(),
     crs: "EPSG:32646",
@@ -915,9 +1064,11 @@ async function main() {
       },
     ],
     gaps,
+    ...(V2 ? { fields } : {}),
   };
 
   fs.writeFileSync(path.join(OUT, "manifest.json"), JSON.stringify(manifest));
+  if (V2) fs.writeFileSync(path.join(OUT, "places.json"), JSON.stringify(placeRecs));
   fs.writeFileSync(path.join(OUT, "overview.json"), JSON.stringify(overview));
   fs.writeFileSync(path.join(OUT, "landmarks.json"), JSON.stringify(landmarkFeatures));
   const coverage = {

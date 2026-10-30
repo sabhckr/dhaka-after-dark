@@ -7,11 +7,19 @@ import {
   splitPolylineByChunks,
   type XZ,
 } from "./geometry.ts";
-import { buildRoadGraph, edgeChunkKey, type GraphEdge, type GraphNode } from "./graph.ts";
+import { buildRoadGraph, edgeChunkKey, graphNodeId, type GraphEdge, type GraphNode } from "./graph.ts";
 import type {
+  BuildingAttrs,
   BuildingRec,
   CanalRec,
   ChunkFile,
+  ChunkVersion,
+  LanduseRec,
+  LineRec,
+  PointKind,
+  PointRec,
+  PowerRec,
+  RoadAttrs,
   EdgeRec,
   LandmarkRec,
   NodeRec,
@@ -32,16 +40,30 @@ export type WorldFeature =
       bridge: boolean;
       oneway: -1 | 0 | 1;
       pts: XZ[];
+      attrs?: RoadAttrs;
     }
   | { kind: "plaza"; id: number; outer: XZ[]; holes: XZ[][] }
-  | { kind: "building"; id: number; h: number; hs: "measured" | "estimated"; outer: XZ[]; holes: XZ[][] }
+  | {
+      kind: "building";
+      id: number;
+      h: number;
+      hs: "measured" | "estimated";
+      outer: XZ[];
+      holes: XZ[][];
+      attrs?: BuildingAttrs;
+    }
   | { kind: "water"; id: number; outer: XZ[]; holes: XZ[][] }
   | { kind: "canal"; id: number; width: number; pts: XZ[] }
   | { kind: "park"; id: number; outer: XZ[]; holes: XZ[][] }
   | { kind: "rail"; id: number; y: number; pts: XZ[] }
   | { kind: "bridge"; id: number; outer: XZ[]; holes: XZ[][] }
   | { kind: "tree"; x: number; z: number; h: number; k: "mapped" | "approx" }
-  | { kind: "landmark"; id: number; name: string; cat: string; x: number; z: number };
+  | { kind: "landmark"; id: number; name: string; cat: string; x: number; z: number }
+  // Schema v2 only; a v1 assembly skips these.
+  | { kind: "point"; id: number; k: PointKind; x: number; z: number; ct?: string; nm?: string }
+  | { kind: "landuse"; id: number; t: string; outer: XZ[]; holes: XZ[][] }
+  | { kind: "barrier"; id: number; t: string; pts: XZ[] }
+  | { kind: "power"; id: number; t: string; kv?: number; pts: XZ[] };
 
 export type AssembleResult = {
   chunks: Map<string, ChunkFile>;
@@ -55,10 +77,10 @@ function flat(pts: XZ[]): number[] {
   return o;
 }
 
-function emptyChunk(c: ChunkCoord, size: number): ChunkFile {
+function emptyChunk(c: ChunkCoord, size: number, version: ChunkVersion): ChunkFile {
   const r = chunkRect(c.ix, c.iy, size);
-  return {
-    v: 1,
+  const chunk: ChunkFile = {
+    v: version,
     ix: c.ix,
     iy: c.iy,
     origin: [r.minX, r.minZ],
@@ -74,6 +96,13 @@ function emptyChunk(c: ChunkCoord, size: number): ChunkFile {
     landmarks: [],
     graph: { nodes: [], edges: [] },
   };
+  if (version === 2) {
+    chunk.points = [];
+    chunk.landuse = [];
+    chunk.barriers = [];
+    chunk.power = [];
+  }
+  return chunk;
 }
 
 function polyRec(id: number, outer: XZ[], holes: XZ[][]): PolyRec {
@@ -130,7 +159,19 @@ function pointRough(x: number, z: number, ring: XZ[]): boolean {
   return inside;
 }
 
-export function assembleWorld(features: WorldFeature[], chunkSize: number): AssembleResult {
+/** Adds the attributes that are set, after the v1 keys, so stripping them gives the v1 record back. */
+function withAttrs<T extends object>(rec: T, attrs: object | undefined): T {
+  if (attrs) for (const [k, v] of Object.entries(attrs)) if (v !== undefined) (rec as Record<string, unknown>)[k] = v;
+  return rec;
+}
+
+/**
+ * Splits features into chunks. Version 1 writes exactly the v1 schema and
+ * ignores v2 attributes and layers; version 2 writes the same v1 records with
+ * their attributes appended, plus the v2 layers.
+ */
+export function assembleWorld(features: WorldFeature[], chunkSize: number, version: ChunkVersion = 1): AssembleResult {
+  const v2 = version === 2;
   const chunks = new Map<string, ChunkFile>();
   const warnings: string[] = [];
   const counts: Record<string, number> = {
@@ -151,13 +192,23 @@ export function assembleWorld(features: WorldFeature[], chunkSize: number): Asse
     graphNodes: 0,
     graphEdges: 0,
   };
+  if (v2) {
+    for (const k of ["landuse", "barriers", "power", "graphSignals", "graphCrossings"]) counts[k] = 0;
+  }
+  const bump = (key: string) => (counts[key] = (counts[key] ?? 0) + 1);
+  const countAttrs = (prefix: string, attrs: object | undefined) => {
+    if (!v2 || !attrs) return;
+    for (const [k, v] of Object.entries(attrs)) if (v !== undefined) bump(`${prefix}.${k}`);
+  };
+  const signalNodes = new Set<string>();
+  const crossingNodes = new Set<string>();
   const roads: { wayId: number; cls: string; oneway: -1 | 0 | 1; pts: XZ[] }[] = [];
 
   const take = (ix: number, iy: number) => {
     const key = chunkKey(ix, iy);
     let c = chunks.get(key);
     if (!c) {
-      c = emptyChunk({ ix, iy }, chunkSize);
+      c = emptyChunk({ ix, iy }, chunkSize, version);
       chunks.set(key, c);
     }
     return c;
@@ -171,6 +222,7 @@ export function assembleWorld(features: WorldFeature[], chunkSize: number): Asse
         continue;
       }
       counts.roads++;
+      countAttrs("roads", f.attrs);
       roads.push({ wayId: f.id, cls: f.cls, oneway: f.oneway, pts: f.pts });
       for (const part of splitPolylineByChunks(f.pts, chunkSize)) {
         const rec: RoadRec = {
@@ -182,7 +234,7 @@ export function assembleWorld(features: WorldFeature[], chunkSize: number): Asse
           bridge: f.bridge,
           pts: flat(part.pts),
         };
-        take(part.ix, part.iy).roads.push(rec);
+        take(part.ix, part.iy).roads.push(v2 ? withAttrs(rec, f.attrs) : rec);
       }
     } else if (f.kind === "canal" || f.kind === "rail") {
       if (f.pts.length < 2) {
@@ -214,6 +266,53 @@ export function assembleWorld(features: WorldFeature[], chunkSize: number): Asse
       const rec: LandmarkRec = { id: f.id, name: f.name, cat: f.cat, x: qCoord(f.x), z: qCoord(f.z) };
       c.landmarks.push(rec);
       counts.landmarks++;
+    } else if (f.kind === "point") {
+      if (!v2) continue;
+      if (!Number.isFinite(f.x) || !Number.isFinite(f.z)) {
+        counts.skipped++;
+        continue;
+      }
+      const rec: PointRec = { id: f.id, k: f.k, x: qCoord(f.x), z: qCoord(f.z) };
+      if (f.ct) rec.ct = f.ct;
+      if (f.nm) rec.nm = f.nm;
+      takeChunkOf(take, f.x, f.z, chunkSize).points!.push(rec);
+      bump(`points.${f.k}`);
+      if (f.k === "signal") signalNodes.add(graphNodeId(f.x, f.z));
+      if (f.k === "crossing") crossingNodes.add(graphNodeId(f.x, f.z));
+    } else if (f.kind === "barrier" || f.kind === "power") {
+      if (!v2) continue;
+      if (f.pts.length < 2) {
+        counts.skipped++;
+        continue;
+      }
+      bump(f.kind === "barrier" ? "barriers" : "power");
+      for (const part of splitPolylineByChunks(f.pts, chunkSize)) {
+        const chunk = take(part.ix, part.iy);
+        if (f.kind === "barrier") {
+          const rec: LineRec = { id: f.id, t: f.t, pts: flat(part.pts) };
+          chunk.barriers!.push(rec);
+        } else {
+          const rec: PowerRec = { id: f.id, t: f.t, pts: flat(part.pts) };
+          if (f.kv) rec.kv = f.kv;
+          chunk.power!.push(rec);
+        }
+      }
+    } else if (f.kind === "landuse") {
+      if (!v2) continue;
+      if (!validRing(f.outer)) {
+        counts.skipped++;
+        continue;
+      }
+      const parts = splitPolygonByChunks(f.outer, f.holes.filter((h) => validRing(h)), chunkSize);
+      if (!parts.length) {
+        counts.skipped++;
+        continue;
+      }
+      bump("landuse");
+      for (const part of parts) {
+        const rec: LanduseRec = { ...polyRec(f.id, part.outer, part.holes), t: f.t };
+        take(part.ix, part.iy).landuse!.push(rec);
+      }
     } else {
       if (!validRing(f.outer)) {
         counts.skipped++;
@@ -237,7 +336,10 @@ export function assembleWorld(features: WorldFeature[], chunkSize: number): Asse
                 ? "plazas"
                 : "bridges";
       counts[bucket]++;
-      if (f.kind === "building") counts[f.hs === "measured" ? "buildingsMeasured" : "buildingsEstimated"]++;
+      if (f.kind === "building") {
+        counts[f.hs === "measured" ? "buildingsMeasured" : "buildingsEstimated"]++;
+        countAttrs("buildings", f.attrs);
+      }
       for (const part of parts) {
         const chunk = take(part.ix, part.iy);
         if (f.kind === "building") {
@@ -248,7 +350,7 @@ export function assembleWorld(features: WorldFeature[], chunkSize: number): Asse
             outer: flat(part.outer),
           };
           if (part.holes.length) rec.holes = part.holes.map(flat);
-          chunk.buildings.push(rec);
+          chunk.buildings.push(v2 ? withAttrs(rec, f.attrs) : rec);
         } else if (f.kind === "water") chunk.water.push(polyRec(f.id, part.outer, part.holes));
         else if (f.kind === "park") chunk.parks.push(polyRec(f.id, part.outer, part.holes));
         else if (f.kind === "plaza") chunk.plazas.push(polyRec(f.id, part.outer, part.holes));
@@ -289,12 +391,21 @@ export function assembleWorld(features: WorldFeature[], chunkSize: number): Asse
     for (const id of nodeIds) {
       const n = nodesById.get(id);
       if (!n) continue;
-      nodeRecs.push({ id, x: qCoord(n.x), z: qCoord(n.z) });
+      const rec: NodeRec = { id, x: qCoord(n.x), z: qCoord(n.z) };
+      if (v2 && signalNodes.has(id)) rec.sig = 1;
+      if (v2 && crossingNodes.has(id)) rec.cr = 1;
+      nodeRecs.push(rec);
     }
     chunk.graph.nodes.push(...nodeRecs);
     chunk.graph.edges.push(...edgeRecs);
   }
 
+  if (v2) {
+    for (const n of graph.nodes) {
+      if (signalNodes.has(n.id)) counts.graphSignals++;
+      if (crossingNodes.has(n.id)) counts.graphCrossings++;
+    }
+  }
   return { chunks, counts, warnings };
 }
 
@@ -320,5 +431,13 @@ export function chunkFeatureCounts(c: ChunkFile): Record<string, number> {
     trees: c.trees.length,
     landmarks: c.landmarks.length,
     graphEdges: c.graph.edges.length,
+    ...(c.v === 2
+      ? {
+          points: c.points?.length ?? 0,
+          landuse: c.landuse?.length ?? 0,
+          barriers: c.barriers?.length ?? 0,
+          power: c.power?.length ?? 0,
+        }
+      : {}),
   };
 }

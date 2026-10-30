@@ -154,8 +154,9 @@ export function buildGreenLine(): THREE.Group {
 export function buildShyamoli(): THREE.Group {
   return buildCoach({ paint: 0xf3e2c4, stripe: 0xc0392b, roof: 0xc0392b, title: "SHYAMOLI" });
 }
-export function buildHanif(): THREE.Group {
-  return buildCoach({ paint: 0xf7f4ee, stripe: 0x1d4e89, roof: 0x1d4e89, title: "HANIF" });
+/** Invented operator; the livery copies no real company. */
+export function buildNishachor(): THREE.Group {
+  return buildCoach({ paint: 0xf2efe6, stripe: 0x5b2a86, roof: 0x5b2a86, title: "NISHACHOR" });
 }
 export function buildSakura(): THREE.Group {
   return buildCoach({ paint: 0xfff5f8, stripe: 0xe45b8a, roof: 0xf7f4ee, title: "SAKURA" });

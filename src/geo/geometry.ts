@@ -104,6 +104,30 @@ export function douglasPeucker(pts: XZ[], tol: number): XZ[] {
   return out;
 }
 
+/** 1 cm key for a source vertex. Copies of one OSM node produce the same key. */
+export function vertexKey(x: number, z: number): string {
+  return `${Math.round(x * 100)}_${Math.round(z * 100)}`;
+}
+
+/**
+ * Douglas-Peucker that never drops a pinned vertex. A road vertex shared with
+ * another road is a junction: removing it from one way (it is often collinear on
+ * the through road) disconnects the T in the graph. The line is simplified
+ * between pins, so pins and both ends always survive.
+ */
+export function douglasPeuckerPinned(pts: XZ[], tol: number, pinned: (p: XZ) => boolean): XZ[] {
+  if (pts.length < 3) return pts.slice();
+  const out: XZ[] = [];
+  let start = 0;
+  for (let i = 1; i < pts.length; i++) {
+    if (i !== pts.length - 1 && !pinned(pts[i])) continue;
+    const run = douglasPeucker(pts.slice(start, i + 1), tol);
+    for (let k = out.length ? 1 : 0; k < run.length; k++) out.push(run[k]);
+    start = i;
+  }
+  return out;
+}
+
 const INSIDE = 0;
 const LEFT = 1;
 const RIGHT = 2;

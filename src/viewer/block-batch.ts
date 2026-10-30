@@ -126,6 +126,9 @@ export class BlockBatches {
       taken.push(mesh);
     });
     let n = 0;
+    // Each touched bucket is rebuilt once per chunk, not once per absorbed mesh.
+    const touchedStatic = new Set<string>();
+    const touchedInstance = new Set<InstanceBlock>();
     for (const obj of taken) {
       const mesh = obj as THREE.Mesh;
       const kind = mesh.userData.blockBatch as string;
@@ -140,7 +143,7 @@ export class BlockBatches {
           this.statics.set(key, bucket);
         }
         bucket.parts.push(part);
-        this.rebuildStatic(key, bucket);
+        touchedStatic.add(key);
         n++;
       } else if (kind === "instance" && (mesh as THREE.InstancedMesh).isInstancedMesh) {
         const inst = mesh as THREE.InstancedMesh;
@@ -169,10 +172,15 @@ export class BlockBatches {
         }
         const visible = groupName === "trees" ? visibility.trees : groupName === "dressing" ? visibility.dressing : visibility.rails;
         bucket.parts.push({ chunk: chunkKey, group: groupName, matrices, colors: hasColor ? colors : null, visible });
-        this.rebuildInstances(bucket);
+        touchedInstance.add(bucket);
         n++;
       }
     }
+    for (const key of touchedStatic) {
+      const bucket = this.statics.get(key);
+      if (bucket) this.rebuildStatic(key, bucket);
+    }
+    for (const bucket of touchedInstance) this.rebuildInstances(bucket);
     return n;
   }
 

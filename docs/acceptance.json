@@ -1,7 +1,7 @@
 {
   "updated": "2026-10-30",
   "engine": "three.js + vite. Native engine migration not started. See docs/engine.md.",
-  "fps90": "NOT MEASURED. This workspace has a software GPU only. Do not treat a SwiftShader frame gap as the high-end PC.",
+  "fps90": "NOT MEASURED on a reference PC. First hardware-GPU runs (Apple M1, headless Chrome, 60 Hz cap) are streaming-stall measurements, not a 90 FPS test. See docs/perf.md, 2026-10-30.",
   "items": [
     { "id": "lm-sangsad", "name": "Jatiya Sangsad Bhaban", "status": "INTEGRATED", "note": "OSM way 18085267 kept. Visual and collision height 33.5 m peripheral, 47 m inner ring. Horizontal joints, circles, and triangles sit on the walls. They are not cut openings and not a scanned Kahn model." },
     { "id": "lm-ahsan", "name": "Ahsan Manzil", "status": "INTEGRATED", "note": "OSM way 624025793. Pink mass and towers. Reference approximation." },
@@ -16,8 +16,12 @@
     { "id": "metro", "name": "Metro train, viaduct, station", "status": "ASSET ACQUIRED", "note": "Uttara display viaduct. Not the Line 6 alignment." },
     { "id": "vehicles", "name": "Buses, police, CNG, rickshaw, cars, motorcycle", "status": "ASSET ACQUIRED", "note": "Some are placed as static props. Traffic still uses its own proxy meshes." },
     { "id": "people", "name": "NPC library", "status": "INTEGRATED", "note": "Street population instances the catalog meshes and walks sidewalks. No skeletal clips." },
-    { "id": "streaming", "name": "Chunk streaming", "status": "INTEGRATED", "note": "Existing 500 m scheduler. Unchanged this pass." },
+    { "id": "streaming", "name": "Chunk streaming", "status": "TESTED", "note": "Regenerated data shows no streaming cost beyond noise (docs/world-data.md). 500 m scheduler, now nearest-first, drops stale jobs and late arrivals, generation-guarded builds. Collision indexes per chunk and batches rebuild once per chunk. Measured on an M1 route: time in >50 ms frames about halved. Since P1 (2026-10-30) the pedestrian graph joins chunks incrementally and chunk work runs in a 6 ms per-frame queue: teleport worst frame 517 -> 52 ms on the M1. Mesh build still runs on the main thread." },
+    { "id": "road-graph", "name": "Road graph topology", "status": "INTEGRATED", "note": "public/world regenerated on 2026-10-30 from the same 2026-10-28 extract (generator 4c54d07): 174 components (was 5,565), largest 98.6 % of nodes (was 71.8 %), 30 dead ends within 5 cm of another road (was 6,710), 0 duplicate edge ids. Every non-road layer is identical. The remaining parts are mostly footpaths OSM does not join. Since T1 traffic drives edges of any length (sim net 97.38 % of its nodes in the largest part, was 90.8 %); it still removes cars at dead ends. See docs/world-data.md and docs/traffic.md." },
     { "id": "audio", "name": "City audio", "status": "NOT STARTED", "note": "No licensed ambience bed yet." },
+    { "id": "p0-harness", "name": "Golden views and A/B timing (P0)", "status": "INTEGRATED", "note": "scripts/look: 27 fixed views (3 districts x street/medium/aerial x day/night/rain), pixel compare, alternated A/B against docs/budgets.json. Two runs of one build: 27 of 27 the same. M1 Air only." },
+    { "id": "p1-streaming", "name": "Streaming without long frames, far ring (P1)", "status": "INTEGRATED", "note": "M1 Air, 3 alternated rounds x2: teleport worst frame 517 -> 52 ms and 389 -> 44 ms, p99 under 50 ms, ring loaded in 0.8 s. Far ring to 3.25 km on High; day fog still hides most of it beyond 2.5 km. No workers. Not measured on a reference PC." },
+    { "id": "p2-world-v2", "name": "World data schema v2 (P2)", "status": "INTEGRATED", "note": "public/world is v2 since 4284b9a (dev/engine-core, not pushed). Generator, validation, compat layer and runtime rules are on dev/engine-core. The v2 run passes the schema diff (all 1,298 v1 chunks byte-equal through toV1) and the raw OSM check (70,277 attributed features match, points within 7 mm). Golden views are identical, and the in-game A/B shows no cost. After the swap: 136 of 136 tests, golden views 27 of 27 the same against pre-swap v1, A/B passes every budget (docs/p2-record.md). Nothing renders v2 fields yet." },
     { "id": "perf-90", "name": "90 FPS on a high-end PC", "status": "BLOCKED", "note": "No high-end GPU in this workspace. The last software-GPU Dhanmondi window was not 30 FPS." }
   ]
 }

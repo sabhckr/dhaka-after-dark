@@ -6,7 +6,6 @@
  */
 
 import { z } from "zod";
-import { CONNECTOR_TOKEN_READY_EVENT } from "./app-data/types";
 import { resolveParentEmbedderOrigin } from "./preview-embedder-origin";
 
 export {
@@ -14,6 +13,9 @@ export {
   isSandboxPreviewGuestHost,
   resolveParentEmbedderOrigin,
 } from "./preview-embedder-origin";
+
+/** Window event the host asks for when a connector token is ready (part of the bridge protocol). */
+const CONNECTOR_TOKEN_READY_EVENT = "grok:connector-token-ready";
 
 export const PREVIEW_BRIDGE_CHANNEL = "grok-preview-bridge" as const;
 export const PREVIEW_BRIDGE_VERSION = 1 as const;

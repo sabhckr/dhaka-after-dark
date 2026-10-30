@@ -27,7 +27,7 @@ If DNCC and DSCC relations appear in a future extract, the generator prefers the
 - CRS: **EPSG:32646** (WGS84 / UTM zone 46N), via proj4.
 - World origin: easting **230000**, northing **2615000**.
 - Axes: **X = east**, **Y = up** (local ground datum, not a DEM), **Z = −north**.
-- Chunks: **500 m**, half-open on the maximum edge. A road that crosses a grid line is split so both chunks share a graph node id snapped to 1 m.
+- Chunks: **500 m**, half-open on the maximum edge. A road that crosses a grid line is split so both chunks share a graph node id. Node ids use a 1 cm grid: roads join only where OSM gives them a shared node, never because they pass close together.
 - Heights: `building:height` / `height` are **measured**. `building:levels × 3.2 m` and class defaults are **estimated**. The viewer draws measured footprints lighter than estimated ones.
 
 Vertical stack (blockout, not a survey): parks 0.05 m, water 0.12 m, canals 0.14 m, plazas 0.22 m, at-grade roads 0.28 m, rail 0.36 m, bridge decks `6 + (layer-1)×5` m. Underpasses are not excavated.
@@ -42,8 +42,10 @@ Vertical stack (blockout, not a survey): parks 0.05 m, water 0.12 m, canals 0.14
 ## Generate
 
 ```bash
-node --max-old-space-size=3072 --experimental-strip-types scripts/geo/generate.ts data/raw/bangladesh.osm.pbf
+WORLD_OUT=<staging folder> node --max-old-space-size=3072 --experimental-strip-types scripts/geo/generate.ts data/raw/bangladesh.osm.pbf
 ```
+
+The generator writes schema v2 by default (`WORLD_SCHEMA=1` for v1; see [docs/world-schema-v2.md](docs/world-schema-v2.md)). It refuses to write into `public/world` unless `WORLD_WRITE_PUBLIC=1` is set. Shipped data is replaced only after a staged run is checked and approved ([docs/world-data.md](docs/world-data.md)).
 
 Outputs:
 
@@ -53,16 +55,16 @@ Outputs:
 - `public/world/overview.json` — major roads, water, boundary for the minimap
 - `public/world/landmarks.json`
 
-Latest generation (2026-10-29, Geofabrik Bangladesh extract dated 2026-10-28):
+Latest generation (2026-10-30, Geofabrik Bangladesh extract dated 2026-10-28):
 
 - Boundary area **302.43 km²** (relation 13663697)
 - **1,298** chunks with features, **1,333** chunks touch the boundary, **37** empty inside it
 - **495,002** building footprints — **630 measured** heights, **494,372 estimated** (OSM almost never tags `building:height` here)
-- **28,889** roads, **56,057** graph edges, **56,750** graph nodes
+- **28,889** roads, **73,080** graph edges, **58,673** graph nodes. The graph has **174** connected parts and the largest holds **98.6 %** of its nodes; the rest are mostly footpaths and footbridge stairs that OSM does not join to a road ([docs/world-data.md](docs/world-data.md))
 - **1,462** water polygons, **1,779** canals/drains, **1,130** parks, **194** rail ways, **21** bridge decks
 - **7,992** mapped trees, **7,223** approximate park trees
 - **1,986** named landmarks
-- Runtime chunks **86.8 MB**
+- Runtime chunks **90.5 MB**
 - Densest 500 m chunk: **4,480** buildings (median 270, 90th percentile 940)
 
 ## Run
@@ -102,3 +104,7 @@ Details and the placement list: [docs/asset-index.md](docs/asset-index.md).
 ## Not in this phase
 
 Traffic simulation, missions, combat, animated crowds, a DEM. Figures in the Sangsad and Shahbagh yards are posed meshes, not pedestrians. There is no screen-space rain reflection and no unique photo per building. Shop boards are only as complete as the OSM name tags.
+
+## Licence
+
+Code: MIT, see [LICENSE](LICENSE). Map data in `public/world/` and the test fixtures in `src/geo/fixtures/`: ODbL 1.0, © OpenStreetMap contributors. Asset licences: [docs/signage-pack.md](docs/signage-pack.md).

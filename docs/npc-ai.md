@@ -24,6 +24,8 @@ There is one population, ticked from the existing viewer loop in `src/viewer/Wor
 - Samples that land inside a building, a water polygon, a canal, or within 1.7 m of a rail are dropped.
 - Footbridge decks and the generated stair runs are foot links. Climbing uses the existing step-up (0.85 m). There is no true vertical path search.
 
+Each chunk's contribution (resampled chains, sidewalk offsets, the building, water, canal and rail tests) is planned once when it loads. A new chunk is joined onto the live graph in place, which gives the same graph a full rebuild would. When a chunk unloads, a replacement graph is built a few milliseconds per frame (`PedNav.step`, 3 ms) while the live one keeps answering; it is swapped in when complete, `version` changes, and walkers anchored in the unloaded chunk leave then. Before this (until P1, 30 Oct 2026) every chunk load rebuilt the whole graph from every loaded chunk, which made it the largest cost of a teleport.
+
 Path search is A* with a cap (700 expansions). It runs when a destination changes, a chunk reloads, or someone is stuck. It does not run for every person every frame. If no path exists, the person waits and the failure is `no-path`. They are not moved through the building.
 
 ## Schedules

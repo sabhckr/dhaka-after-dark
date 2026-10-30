@@ -8,9 +8,13 @@ import { buildRoadGraph, graphNodeId, indexEdges, nearestRoad } from "./graph.ts
 import {
   clipPolygonToRect,
   clipPolylineToRect,
+  douglasPeucker,
+  douglasPeuckerPinned,
   nudgeVerifiedCurves,
   pointInRing,
   splitPolylineByChunks,
+  vertexKey,
+  type XZ,
 } from "./geometry.ts";
 import { ChunkScheduler, releaseChunkResources } from "./streaming.ts";
 import { validateChunk, validateManifest } from "./validate.ts";
@@ -104,6 +108,89 @@ test("polygon clip keeps area inside the rectangle", () => {
   }
   assert.ok(pointInRing(480, 100, clipped));
   assert.equal(pointInRing(520, 100, clipped), false);
+});
+
+test("pinned simplification keeps a collinear T-junction vertex so the graph stays connected", () => {
+  // Through road along z=100 with the T node at x=150 sitting exactly on the line.
+  const through: XZ[] = [
+    [100, 100],
+    [150, 100],
+    [200, 100],
+  ];
+  const stem: XZ[] = [
+    [150, 100],
+    [150, 160],
+  ];
+  // Plain DP drops the collinear vertex and the stem end no longer meets a vertex.
+  assert.equal(douglasPeucker(through, 0.3).length, 2);
+  const junctions = new Set([vertexKey(150, 100)]);
+  const isJunction = (p: XZ) => junctions.has(vertexKey(p[0], p[1]));
+  const kept = douglasPeuckerPinned(through, 0.3, isJunction);
+  assert.deepEqual(kept, through);
+  const graph = buildRoadGraph(
+    [
+      { wayId: 1, cls: "primary", oneway: 0, pts: kept },
+      { wayId: 2, cls: "residential", oneway: 0, pts: douglasPeuckerPinned(stem, 0.3, isJunction) },
+    ],
+    500,
+  );
+  const tNode = graphNodeId(150, 100);
+  assert.equal(graph.edges.filter((e) => e.a === tNode || e.b === tNode).length, 3);
+  // Unpinned points between pins still simplify, and both ends always survive.
+  const wiggle: XZ[] = [
+    [0, 0],
+    [10, 0.05],
+    [20, 0],
+    [30, 0.05],
+    [40, 0],
+  ];
+  const pinMid = (p: XZ) => p[0] === 20;
+  assert.deepEqual(douglasPeuckerPinned(wiggle, 0.3, pinMid), [
+    [0, 0],
+    [20, 0],
+    [40, 0],
+  ]);
+  assert.deepEqual(douglasPeuckerPinned(wiggle, 0.3, () => false), [
+    [0, 0],
+    [40, 0],
+  ]);
+});
+
+test("graph joins only shared vertices and numbers clipped parts of one way apart", () => {
+  const graph = buildRoadGraph(
+    [
+      // Way 1 and way 2 end 0.42 m apart, inside one metre cell, with no shared vertex: not a junction.
+      { wayId: 1, cls: "residential", oneway: 0, pts: [[10, 10.1], [60.1, 10.1]] },
+      { wayId: 2, cls: "residential", oneway: 0, pts: [[60.4, 10.4], [60.4, 90]] },
+      // Way 3 leaves and re-enters the boundary, so it arrives as two parts.
+      { wayId: 3, cls: "primary", oneway: 0, pts: [[100, 0], [150, 0]] },
+      { wayId: 3, cls: "primary", oneway: 0, pts: [[200, 0], [250, 0]] },
+    ],
+    500,
+  );
+  const end1 = graphNodeId(60.1, 10.1);
+  const end2 = graphNodeId(60.4, 10.4);
+  assert.notEqual(end1, end2);
+  assert.equal(graph.edges.filter((e) => e.a === end1 || e.b === end1).length, 1);
+  const ids = graph.edges.filter((e) => e.way === 3).map((e) => e.id);
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 2);
+});
+
+test("a junction two centimetres from a chunk border merges into the border node", () => {
+  const graph = buildRoadGraph(
+    [
+      { wayId: 1, cls: "primary", oneway: 0, pts: [[400, 100], [499.98, 100], [600, 100]] },
+      { wayId: 2, cls: "residential", oneway: 0, pts: [[499.98, 0], [499.98, 100]] },
+    ],
+    500,
+  );
+  const border = graphNodeId(500, 100);
+  assert.ok(graph.nodes.some((n) => n.id === border));
+  assert.ok(!graph.nodes.some((n) => n.id === graphNodeId(499.98, 100)));
+  assert.equal(graph.edges.filter((e) => e.a === border || e.b === border).length, 3);
+  const lengths = graph.edges.map((e) => e.pts.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - e.pts[i][0], p[1] - e.pts[i][1]), 0));
+  assert.ok(Math.min(...lengths) > 1);
 });
 
 test("cross-chunk road graph shares a boundary node id", () => {
@@ -389,4 +476,96 @@ test("hysteresis does not unload a chunk still inside the keep radius", async ()
   assert.equal(unloaded.length, 0);
   assert.ok(s.loaded.has("-1_0"));
   assert.ok(fetched.length >= before);
+});
+
+test("scheduler fetches nearest chunks first and drops jobs the camera has left", async () => {
+  const order: string[] = [];
+  const loaded: string[] = [];
+  const s = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 3,
+    maxConcurrent: 1,
+    fetchChunk: async (ix, iy) => {
+      order.push(`${ix}_${iy}`);
+      await new Promise((r) => setTimeout(r, 2));
+      return { ix, iy };
+    },
+    onLoad: (key) => loaded.push(key),
+    onUnload: () => {},
+    onError: () => {},
+  });
+  s.update(0, 0);
+  assert.equal(order[0], "0_0");
+  // Fly far away before the queue drains: the old neighbourhood is not fetched.
+  s.update(50, 50);
+  await new Promise((r) => setTimeout(r, 120));
+  const stale = order.slice(1).filter((key) => {
+    const [x, y] = key.split("_").map(Number);
+    return Math.max(Math.abs(x - 50), Math.abs(y - 50)) > 1;
+  });
+  assert.deepEqual(stale, []);
+  // The first fetch landed after the move, beyond the unload radius, so it is not kept.
+  assert.equal(s.loaded.has("0_0"), false);
+  assert.ok(loaded.includes("50_50"));
+  s.dispose();
+});
+
+test("cells outside the dataset are never fetched", async () => {
+  const fetched: string[] = [];
+  const s = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 3,
+    maxConcurrent: 9,
+    exists: (ix) => ix >= 0,
+    fetchChunk: async (ix, iy) => {
+      fetched.push(`${ix}_${iy}`);
+      return { ix, iy };
+    },
+    onLoad: () => {},
+    onUnload: () => {},
+    onError: () => {},
+  });
+  s.update(0, 0);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(fetched.length, 6);
+  assert.ok(fetched.every((k) => !k.startsWith("-")));
+  assert.equal(s.loadingCount, 0);
+});
+
+test("a lead cell pulls its neighbourhood in after the focus ring, inside the unload radius only", async () => {
+  const order: string[] = [];
+  const s = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 4,
+    maxConcurrent: 1,
+    fetchChunk: async (ix, iy) => {
+      order.push(`${ix}_${iy}`);
+      return { ix, iy };
+    },
+    onLoad: () => {},
+    onUnload: () => {},
+    onError: () => {},
+  });
+  s.update(0, 0, { ix: 2, iy: 0 });
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 2));
+  assert.deepEqual(new Set(order.slice(0, 9)), new Set(["-1_-1", "0_-1", "1_-1", "-1_0", "0_0", "1_0", "-1_1", "0_1", "1_1"]));
+  for (const key of ["2_-1", "2_0", "2_1", "3_-1", "3_0", "3_1"]) assert.ok(order.includes(key), `${key} not prefetched`);
+  assert.equal(order.length, 15);
+  // A lead beyond the unload radius brings nothing in that would be unloaded at once.
+  const far: string[] = [];
+  const t = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 3,
+    maxConcurrent: 9,
+    fetchChunk: async (ix, iy) => {
+      far.push(`${ix}_${iy}`);
+      return { ix, iy };
+    },
+    onLoad: () => {},
+    onUnload: () => {},
+    onError: () => {},
+  });
+  t.update(0, 0, { ix: 3, iy: 0 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(far.every((k) => Number(k.split("_")[0]) <= 2), far.join(" "));
 });

@@ -1,0 +1,212 @@
+# P2 world data v2: running record
+
+Branch `dev/engine-core` in the worktree `~/Documents/dhaka-after-dark-p1`. Nothing is pushed or merged. Every regeneration wrote to a staging folder. `public/world` was changed once, by the approved swap in 4284b9a, from the validated staging copy.
+
+## Status (2026-10-30)
+
+| Part | State | Evidence |
+|---|---|---|
+| Audit of v1 data and generator | Done | Section "Audit" below |
+| Schema v2 types, OSM extraction, generator | Done | 9cf8267, 173f747 |
+| Validation, compatibility layer, runtime rules | Done | 9cf8267 |
+| Migration tooling (diff, OSM check, swap list, benchmark) | Done | 173f747, b8ef5ae, docs commit |
+| Tests | 18 in `world-v2.test.ts`, all game tests pass | `npm test` TS suite: 136 of 136 after the swap |
+| Staged regeneration and checks | Done, all pass | Section "Verification" |
+| Benchmarks, old against new | Done | Section "Benchmarks" |
+| Replacing `public/world` with v2 | Done after approval, 4284b9a | Section "Swap" |
+| Rendering anything from v2 | Not started; P3, P4 and P6 work | |
+
+## Audit
+
+- `public/world` is 1,298 chunk files (89 MB), `manifest.json`, `overview.json`, `coverage.json`, `landmarks.json`, plus `signs/` (594 files, written by `extract-shops.ts`) and `assets/manifest.json` (hand-maintained). Only the first five are generator output.
+- v1 keeps footprint, height and height source for buildings, and class, width, deck height and bridge flag for roads. It has no building type, levels, material, lanes, sidewalks, signals, crossings, stops, lamps, landuse or walls. The road graph has no signal data, so the traffic sim treats every node with three or more links as a signal (backlog T4).
+- `scripts/geo/generate.ts` wrote into `public/world` by default and deleted `public/world/chunks` first. It now refuses to write there unless `WORLD_WRITE_PUBLIC=1` is set.
+- The runtime fetched `/world/...` from three places and validated only `v === 1`.
+- Chunks are consumed by meshes, dressing, collision, the pedestrian graph, traffic and the far ring. None of them reads a field v2 adds.
+
+## Design
+
+See `docs/world-schema-v2.md`. In short: additive only, OSM-only data with a source per field, rules in `src/geo/infer.ts` labelled `osm`, `rule` or `default`, and readers that accept v1 and v2.
+
+## Commits
+
+Before the first push, all 24 unpushed commits were rewritten from a machine-generated author address to the GitHub noreply identity. Trees, dates and messages are unchanged, and the hashes in these docs are the rewritten ones. The originals are in the local branches `backup/dev-foundation-pre-rewrite` and `backup/dev-engine-core-pre-rewrite`.
+
+| Commit | Content |
+|---|---|
+| 9cf8267 | v2 types, OSM tag extraction, v2 assembly, validation, `compat.ts`, `infer.ts`, generator schema switch and write guard, 16 tests |
+| 173f747 | `diff-schema.ts`, `dump-osm-sample.ts`, `check-v2-osm.py`; two parser bugs fixed |
+| 48a8fbb | Type error in `dump-osm-sample.ts`. 173f747 was committed with it: the typecheck output went through a pipe that hid its exit code |
+| b8ef5ae | Dev-only `?world=stage` switch, `/world-stage/` middleware, `bench-format.ts` |
+| b0edd97 | `swap-plan.mjs`, `p2-swap-plan.tsv`, `world-schema-v2.md`, this record |
+| 4284b9a | The swap: `public/world` is v2; two pre-swap v1 chunks kept as test fixtures |
+
+## Verification
+
+All runs used the 2026-10-28 extract (`data/raw/bangladesh.osm.pbf`, MD5 `0e9db373accaa20f98f1c344ee6543ee`) and wrote to the session scratchpad.
+
+1. **v1 path unchanged.** `WORLD_SCHEMA=1` reproduces shipped data: all 1,298 chunks, `overview`, `coverage` and `landmarks` are byte-identical, and the manifest differs only in `generatedAt`. 78 s, peak footprint 2.39 GB.
+2. **v2 regeneration.** 1,303 chunks, 93.2 MB. 76 s, peak footprint 1.87 GB.
+3. **`diff-schema.ts`, shipped against staged v2: PASS.**
+   - All 1,298 old chunks are still there, and `toV1(new)` is byte-equal to each one.
+   - 5 chunks were added, holding only v2 features; none was removed.
+   - Every chunk passes `validateChunk`, and the manifest passes `validateManifest`.
+   - Boundary, CRS, origin, spawns and sources are unchanged, and `overview.json` and `landmarks.json` are byte-identical.
+4. **Raw OSM check (`check-v2-osm.py`): PASS.** It covers every attributed feature: 57,793 buildings, 11,154 roads, 993 landuse areas, 295 barriers and 42 power lines. All match the raw tags. All 2,578 points are within 7 mm of their OSM node, against a 1 cm limit (p99 6.6 mm). A sample of 5,000 untagged buildings and 5,000 untagged roads has nothing in OSM that v2 should have copied.
+5. **Tests.** 17 new tests in `src/geo/world-v2.test.ts` cover:
+   - parsing of every field, including the two bugs below;
+   - that v1 assembly ignores v2 input;
+   - `toV1` round trips;
+   - signal-to-node matching;
+   - chunk splitting of the new layers;
+   - point positions;
+   - v1 and v2 validation, and the manifest `fields` check;
+   - `normalizeChunk` and `upgradeV1`;
+   - byte round trips of four shipped chunks;
+   - that the pedestrian plan and collision are identical for a chunk in v1 and v2 form;
+   - the runtime rules;
+   - the write guard and the stage switch.
+
+   TS suite: 135 of 135 pass. Typecheck, now also covering `scripts/geo`, is clean, and lint has 0 errors.
+6. **In the game.** The dev server served the staged data with `?world=stage`. A check of the loaded resources showed 34 chunks fetched from `/world-stage/` (sample chunk `v: 2`) and none from `/world/`. The plain URL loaded 35 chunks from `/world/` (`v: 1`). Both had 0 page errors.
+7. **Golden views.** 27 of 27 are the same, v1 against staged v2 on the same build, with 0 console errors in either capture. The current build against the build before P2 also gives 27 of 27 the same.
+
+## Bugs found and fixed
+
+| Bug | Found by | Fix |
+|---|---|---|
+| `building:levels="5th Floor"` (an address note) was stored as 5 levels | the raw OSM check | v2 reads only plain counts |
+| Levels in Bangla digits (`২`, `৮`, `৯`) were dropped: JavaScript `\d` matches ASCII only | the raw OSM check, full run | v2 numeric fields convert Bangla digits |
+| A compatibility test compared `.length` of an object, so it checked nothing | review of the first test run | it now compares the full collision bucket |
+| 173f747 was committed with a type error | the next typecheck | 48a8fbb |
+
+## Benchmarks
+
+Machine: M1 Air, 8 GB, with about 2 GB of swap in use.
+
+### File size (chunks only)
+
+| | v1 shipped | v2 staged | Change |
+|---|---|---|---|
+| Files | 1,298 | 1,303 | +5 |
+| Raw | 90.50 MB | 93.15 MB | +2.9 % |
+| gzip −9 | 22.81 MB | 23.62 MB | +3.6 % |
+| brotli 11 | 17.07 MB | 17.73 MB | +3.8 % |
+
+The roadmap budget was +25 %. `places.json` (120 KB) is new, and the manifest grew from 244 KB to 314 KB.
+
+### Load cost, Node 5 alternated rounds (`bench-format.ts`)
+
+Times are for parse + validate + normalise of every chunk, read from memory.
+
+| | v1 | v2 | Change |
+|---|---|---|---|
+| All chunks | 359 ms | 418 ms | +16 % |
+| of which JSON.parse | 293 ms | 313 ms | +7 % |
+| of which validate | 66 ms | 105 ms | +60 % (the v2 field checks) |
+| Per chunk, median / p95 / max | 0.20 / 0.71 / 2.56 ms | 0.24 / 0.82 / 3.19 ms | |
+| Heap retained, whole city parsed | 154 MB | 174 MB | +13 % |
+
+The game holds a 5 × 5 ring plus the far ring at a time, not the whole city. For scale, building the meshes for one ring of 21 to 25 chunks took 140 to 250 ms in P1, 28 ms for the worst single chunk (docs/perf.md).
+
+### In the game
+
+`npm run perf:ab` on one dev server: A is shipped v1 (`/`), B is staged v2 (`/?world=stage`). Same code, 3 alternated rounds, medians over rounds. The display caps at 60 Hz. Report: `out/look/perf-ab-p2.json` (gitignored).
+
+| | A: v1 | B: v2 |
+|---|---|---|
+| Steady median, 3 views | 16.7 / 16.7 / 16.7 ms | 16.7 / 16.7 / 16.7 ms |
+| Steady p99, 3 views | 18.5 / 18.4 / 18.5 ms | 18.5 / 18.5 / 18.4 ms |
+| Teleport to Old Dhaka: nearby chunks loaded / p99 / worst | 807 ms / 40.5 ms / 58.8 ms | 804 ms / 42.0 ms / 61.4 ms |
+| Teleport to Uttara: nearby chunks loaded / p99 / worst | 805 ms / 23.1 ms / 44.0 ms | 805 ms / 21.5 ms / 43.7 ms |
+| Frames over 100 ms | 0 | 0 |
+| JS heap at Kawran street / Old Dhaka / Gulshan | 278 / 247 / 248 MB | 284 / 249 / 258 MB |
+| Draws at the 3 views | 157 / 94 / 138 | 151 / 93 / 143 |
+
+Every budget in `docs/budgets.json` passes for B. The differences are within the run-to-run spread seen in P1. The draw counts move by a few because traffic and pedestrians keep moving during the steady sample. No 90 FPS claim: this is an M1 at a 60 Hz cap.
+
+## Outstanding issues
+
+- **v1 height parser.** `classifyHeight` still reads levels leniently. "5th Floor" becomes 5 levels (16 m), and Bangla-digit levels are ignored, which falls back to the class default. Fixing it changes v1 building heights, which is a geometry change. So it is left for a separate, approved data change. The whole-country extract has 38,650 building ways with `building:levels`. Of these, 38,547 are plain ASCII numbers, 9 use Bangla digits, 40 contain a number that is not a count ("5-6", ">2", "-4", "5th Floor", "3 Level"), and 54 have no digit at all. So the v1 misreading affects at most 49 ways in the country.
+- **Nothing renders v2 yet.** Building types, levels, materials, lanes, sidewalks, landuse and lamps feed P3, P4 and P6.
+- **Signals.** Only 51 of the 95 OSM signals sit on a graph node, so P6 must use `points` for the others.
+- **Elevated structures (D4).** `mh`/`mlv` are rare (27 buildings) and `ly` is on 1,145. `buildingElevated` returns `rule` for layer alone, and how to draw these is P4 work.
+- **District names.** These come from the nearest place node (`rule`), not from polygons.
+- **Coverage.** OSM coverage is thin for every field (6 % of buildings have levels, 5.7 % of roads have lanes). v2 does not fill the gaps. That is what the labelled rules are for.
+- **Staging copy.** The validated copy is at `~/Documents/dhaka-after-dark-staging/world-v2-2026-10-30`, with `SHA256SUMS` and the reports from its checks (`diff-final.json`, `geo-check-all.json`, `bench-format.json`, the generator log). The scratchpad copies under `/private/tmp` are not durable.
+
+## Swap (done 2026-10-30, commit 4284b9a)
+
+Approved by the user ("Approve the swap") and run as planned below, on `dev/engine-core` only. Not pushed.
+
+| Check | Result |
+|---|---|
+| Copied files against the TSV `new_sha256` | 1,308 of 1,308 match |
+| `signs/` and `assets/` | 595 files, hashes unchanged |
+| `git status` under `public/world` | exactly 1,300 modified and 6 new |
+| `diff-schema.ts`, pre-swap tree against `public/world` | PASS, 1,298 of 1,298 v1 views identical |
+| Tests, typecheck, lint, build | 136 of 136; 0; 0 errors (1 existing warning); 0 |
+| Golden views (`out/look/p2-swap`) | 27 of 27 the same against pre-swap v1 (`p2-v1`) and against staged v2 (`p2-v2`); 0 console errors |
+| In-game load, plain URL | 38 chunks from `/world/`, sampled chunks `v: 2`, manifest `v: 2` with `fields` and 1,303 chunks; 0 console errors |
+
+Two tests assumed the shipped data was v1 and failed after the copy. They were reworked, not loosened: `src/geo/fixtures/c_8_-29.v1.json` and `c_10_-20.v1.json` are the pre-swap files from git, and the tests now check that `toV1(shipped)` equals them byte for byte and that meshes, solids and the collision bucket built from the shipped chunk equal those built from its v1 form.
+
+**A/B after the swap.** One dev server, A = pre-swap v1 through `?world=stage`, B = shipped v2. 3 alternated rounds, medians over rounds. Report `out/look/perf-ab-swap.json` (gitignored).
+
+| | A: v1 | B: v2 |
+|---|---|---|
+| Steady median, 3 views | 16.7 / 16.7 / 16.7 ms | 16.7 / 16.7 / 16.7 ms |
+| Steady p99, 3 views | 17.6 / 17.6 / 17.6 ms | 17.6 / 17.4 / 17.6 ms |
+| Teleport to Old Dhaka: loaded / p99 / worst | 823 ms / 40.7 ms / 49.9 ms | 817 ms / 47.1 ms / 54.5 ms |
+| Teleport to Uttara: loaded / p99 / worst | 804 ms / 25.4 ms / 37.3 ms | 807 ms / 24.8 ms / 43.3 ms |
+| JS heap at the 3 views | 278 / 251 / 268 MB | 304 / 243 / 277 MB |
+| Draws at the 3 views | 158 / 96 / 141 | 152 / 95 / 136 |
+
+Every budget passes for B. Single rounds vary: A's round 1 had a 85 ms Old Dhaka teleport frame, and B's round 3 had one of 103 ms, above the 100 ms budget; the medians over rounds are 49.9 and 54.5 ms. This matches the spread seen in P1 and in the staged A/B above, so it is not attributed to v2, but it is noted.
+
+## Swap plan as approved
+
+Kept as the record of what was approved.
+
+**Source.** The validated staged regeneration, copied with a SHA-256 list to `~/Documents/dhaka-after-dark-staging/world-v2-2026-10-30` (outside every repository).
+
+**Exact file list.** [`docs/p2-swap-plan.tsv`](p2-swap-plan.tsv) has one row per generator-owned file: action, path, old and new bytes, old and new SHA-256. Totals:
+
+| Action | Files | Shipped bytes | v2 bytes |
+|---|---|---|---|
+| replace | 1,300 (1,298 chunks, `manifest.json`, `coverage.json`) | 90,754,712 | 93,470,936 |
+| add | 6 (chunks `-1_-26`, `-4_-28`, `11_-49`, `22_-59`, `24_-32`, and `places.json`) | 0 | 122,038 |
+| unchanged | 2 (`overview.json`, `landmarks.json`, byte-identical) | 702,876 | 702,876 |
+| delete | 0 | | |
+
+Generator-owned total: 91.58 MB → 94.30 MB (+3.0 %). Its `SHA256SUMS` lists all 1,308 staged files, and `shasum -a 256 -c SHA256SUMS` passes.
+
+`signs/` (594 files) and `assets/manifest.json` are not touched. They are not generator output, and the overview boundary that `signs/` depends on is byte-identical.
+
+**Plan.** Run it in the `dhaka-after-dark-p1` worktree on `dev/engine-core`, never on `main`:
+
+1. Check preconditions: the worktree is clean; `diff-schema.ts` still passes against the staging copy; the staging copy's hashes match the TSV.
+2. Copy the files in. No file is deleted, so no `--delete`:
+   ```bash
+   STAGE=~/Documents/dhaka-after-dark-staging/world-v2-2026-10-30
+   rsync -a "$STAGE/chunks/" public/world/chunks/
+   cp "$STAGE"/{manifest,overview,coverage,landmarks,places}.json public/world/
+   ```
+3. Verify:
+   - every file hashes to its TSV `new_sha256`;
+   - `signs/` and `assets/` hashes are unchanged;
+   - `git status` shows exactly 1,300 modified and 6 new files under `public/world`.
+4. Re-run the checks: the game tests, typecheck and build; golden views (27 of 27 the same against the pre-swap commit); an in-game load with 0 errors; one A/B run against the pre-swap commit.
+5. Commit the swap as one commit, `World data: schema v2`. Do not push.
+
+**Risks.**
+
+- **Git history.** The swap changes about 93 MB of chunk files, and the shipped v1 data stays in history. The estimate made here before the swap (roughly 23 MB compressed) was too high. Measured with `git pack-objects` after the swap: the swap commit packs to 3.9 MB because v2 only appends to each chunk, a push of `dev/engine-core` sends 6.6 MB in all (23 commits, including `dev/foundation`), and a full clone grows from 52.4 to 56.1 MB.
+- **Old builds.** A build older than 9cf8267 rejects v2 chunks ("unsupported chunk version"). Code and data deploy together from one commit, so this matters only for a stale cached bundle meeting new data. The chunk URLs are not versioned.
+- **Load cost.** 5 more chunk files are fetched near the city edge. Validation costs about 0.04 ms more per chunk, and a fully parsed city takes 13 % more heap.
+- **Nothing visible changes.** Golden views are identical. Any later renderer change that uses v2 fields is separate work.
+
+**Rollback.**
+
+- Before the commit: `git restore --source=HEAD --staged --worktree public/world`, then move the 6 added files to the Trash with `/usr/bin/trash`. Nothing else needs undoing.
+- After the commit (now): `git revert 4284b9a^..HEAD`, while nothing else sits on top. It reverts newest first: the licence and docs fix, 5064051, then the swap, so the docs never claim v2 data and no revert conflicts. The swap and the docs commits touch no file in common and the runtime code is unchanged since b0edd97, so this returns the tree to b0edd97 exactly, a state that passed every check. Once pushed, revert; never force-push.

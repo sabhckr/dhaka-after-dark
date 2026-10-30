@@ -2,7 +2,8 @@
  * Kinematic traffic on the loaded OSM road graph.
  * Not a physics vehicle. Cars follow graph edges, keep a gap, and stop
  * short of a red phase at junctions with three or more links.
- * Sidewalks, footways, and motorways are not in this net.
+ * Sidewalks, footways, and motorways are not in this net. Links of any length are,
+ * so the halves of a split junction stay joined.
  */
 
 export const DRIVE_CLASS = new Set([
@@ -50,6 +51,8 @@ export type TrafficCar = {
   yaw: number;
   stuck: number;
   held: "none" | "gap" | "signal" | "dead-end" | "blocked";
+  /** Last edges entered, newest last. A closed loop is left instead of lapped. */
+  trail: string[];
 };
 
 type NetEdge = {
@@ -75,6 +78,14 @@ export type TrafficOptions = {
 
 const KINDS: VehKind[] = ["car", "car", "car", "cng", "cng", "bike", "bus"];
 
+/**
+ * Short edges stay in the net: they are often the link between two halves of one junction,
+ * and dropping them cut the route there. Only an edge this long gets a stop line, and only
+ * one this long spawns cars; a shorter one is driven straight through.
+ */
+const STOP_LINE_EDGE_M = 8;
+const TRAIL = 8;
+
 function push(map: Map<string, string[]>, key: string, value: string) {
   const arr = map.get(key);
   if (arr) arr.push(value);
@@ -99,7 +110,7 @@ function chain(pts: number[]): { pts: Array<[number, number]>; cum: number[]; le
     len += Math.hypot(out[i][0] - out[i - 1][0], out[i][1] - out[i - 1][1]);
     cum.push(len);
   }
-  if (len < 8) return null;
+  if (len < 0.01) return null;
   return { pts: out, cum, len };
 }
 
@@ -208,7 +219,7 @@ export class TrafficSim {
     return Math.floor(this.time / 8) % 2 === axis;
   }
 
-  private choices(node: string, fromKey: string, dx: number, dz: number) {
+  private choices(node: string, fromKey: string, dx: number, dz: number, trail: string[]) {
     const keys = this.byNode.get(node) ?? [];
     const out: { key: string; dir: 1 | -1; score: number }[] = [];
     for (const key of keys) {
@@ -219,6 +230,8 @@ export class TrafficSim {
       const sample = poseAt(edge, dir, 1);
       let score = dx * sample.dx + dz * sample.dz;
       if (key === fromKey) score -= 1.4;
+      // A link driven moments ago ranks below any turn, so a car does not lap a small loop.
+      else if (trail.includes(key)) score -= 1.2;
       out.push({ key, dir, score });
     }
     out.sort((a, b) => b.score - a.score);
@@ -245,7 +258,7 @@ export class TrafficSim {
     for (const edge of this.edges.values()) {
       const mid = poseAt(edge, 1, edge.len * 0.5);
       const dist = Math.hypot(mid.x - this.px, mid.z - this.pz);
-      if (dist >= 26 && dist <= 160) near.push(edge);
+      if (edge.len >= STOP_LINE_EDGE_M && dist >= 26 && dist <= 160) near.push(edge);
     }
     if (!near.length) return;
     const edge = near[Math.floor(this.rand() * near.length) % near.length];
@@ -270,6 +283,7 @@ export class TrafficSim {
       yaw: 0,
       stuck: 0,
       held: "none",
+      trail: [edge.key],
     };
     this.place(car, edge);
     this.cars.push(car);
@@ -295,6 +309,7 @@ export class TrafficSim {
       yaw: 0,
       stuck: 0,
       held: "none",
+      trail: [edge.key],
     };
     this.place(car, edge);
     this.cars.push(car);
@@ -355,9 +370,18 @@ export class TrafficSim {
 
       const remain = edge.len - car.s;
       const node = car.dir === 1 ? edge.b : edge.a;
-      const axis: 0 | 1 = Math.abs(here.dx) >= Math.abs(here.dz) ? 0 : 1;
-      if (remain < 16 && !this.green(node, axis)) {
-        const stopAt = edge.len - 6.5;
+      // The phase follows the approach into the node, not the car's local heading: on a
+      // bending edge the local heading can swap axis between two frames and never settle.
+      const into = poseAt(edge, car.dir, edge.len);
+      const axis: 0 | 1 = Math.abs(into.dx) >= Math.abs(into.dz) ? 0 : 1;
+      const stopAt = edge.len - 6.5;
+      // A car already past the stop line clears the junction instead of jumping back to it.
+      if (
+        edge.len >= STOP_LINE_EDGE_M &&
+        remain < 16 &&
+        !this.green(node, axis) &&
+        car.s <= stopAt + 0.5
+      ) {
         if (car.s >= stopAt - 0.4) {
           limit = 0;
           car.s = Math.min(car.s, stopAt);
@@ -404,8 +428,8 @@ export class TrafficSim {
         continue;
       }
 
-      const overshoot = nextS - edge.len;
-      const options = this.choices(node, edge.key, here.dx, here.dz);
+      let over = nextS - edge.len;
+      const options = this.choices(node, edge.key, here.dx, here.dz, car.trail);
       if (!options.length) {
         car.s = edge.len;
         car.speed = 0;
@@ -415,12 +439,27 @@ export class TrafficSim {
         if (car.stuck > 1.6) this.cars.splice(i, 1);
         continue;
       }
-      const pick = options[0];
-      const nxt = this.edges.get(pick.key);
-      if (!nxt) continue;
+      let pick = options[0];
+      const first = this.edges.get(pick.key);
+      if (!first) continue;
+      let nxt: NetEdge = first;
+      // One step can run past a link shorter than the step; carry the rest into the next edge.
+      for (let hop = 0; hop < 8 && over >= nxt.len; hop++) {
+        const end = poseAt(nxt, pick.dir, nxt.len);
+        const on = pick.dir === 1 ? nxt.b : nxt.a;
+        const after = this.choices(on, nxt.key, end.dx, end.dz, car.trail)[0];
+        const then = after && this.edges.get(after.key);
+        if (!after || !then) break;
+        car.trail.push(nxt.key);
+        over -= nxt.len;
+        pick = after;
+        nxt = then;
+      }
       car.edge = nxt.key;
       car.dir = pick.dir;
-      car.s = Math.min(nxt.len * 0.85, Math.max(0.2, overshoot));
+      car.trail.push(nxt.key);
+      if (car.trail.length > TRAIL) car.trail.splice(0, car.trail.length - TRAIL);
+      car.s = Math.min(nxt.len, Math.max(Math.min(0.2, nxt.len / 2), over));
       car.stuck = 0;
       car.held = "none";
       this.place(car, nxt);
