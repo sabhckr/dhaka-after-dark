@@ -27,7 +27,7 @@ If DNCC and DSCC relations appear in a future extract, the generator prefers the
 - CRS: **EPSG:32646** (WGS84 / UTM zone 46N), via proj4.
 - World origin: easting **230000**, northing **2615000**.
 - Axes: **X = east**, **Y = up** (local ground datum, not a DEM), **Z = −north**.
-- Chunks: **500 m**, half-open on the maximum edge. A road that crosses a grid line is split so both chunks share a graph node id snapped to 1 m.
+- Chunks: **500 m**, half-open on the maximum edge. A road that crosses a grid line is split so both chunks share a graph node id. Node ids use a 1 cm grid: roads join only where OSM gives them a shared node, never because they pass close together.
 - Heights: `building:height` / `height` are **measured**. `building:levels × 3.2 m` and class defaults are **estimated**. The viewer draws measured footprints lighter than estimated ones.
 
 Vertical stack (blockout, not a survey): parks 0.05 m, water 0.12 m, canals 0.14 m, plazas 0.22 m, at-grade roads 0.28 m, rail 0.36 m, bridge decks `6 + (layer-1)×5` m. Underpasses are not excavated.

@@ -1,8 +1,13 @@
 import { chunkKey, worldToChunk } from "./chunks.ts";
 import { insertChunkCrossings, type XZ } from "./geometry.ts";
 
-/** Graph nodes snap to this grid so shared intersections get one stable id. */
-export const GRAPH_SNAP_M = 1;
+/**
+ * Graph node id grid. Ways that share an OSM node keep that vertex bit-identical
+ * through pinned simplification, and chunk-border crossings are computed once per
+ * road, so 1 cm only absorbs float noise. A coarser grid joins roads that merely
+ * pass close to each other, which is proximity, not connectivity.
+ */
+export const GRAPH_SNAP_M = 0.01;
 
 export type GraphNode = { id: string; x: number; z: number };
 export type GraphEdge = {
@@ -61,6 +66,31 @@ export function buildRoadGraph(roads: GraphRoad[], chunkSize: number): RoadGraph
     return id;
   };
 
+  // Two split points of one way closer than this are one node: typically a junction a few
+  // centimetres from the chunk-border crossing inserted next to it. Different ways never merge here.
+  const STUB_M = 0.05;
+  const merged = new Map<string, string>();
+  const root = (id: string): string => {
+    let r = id;
+    while (merged.has(r)) r = merged.get(r)!;
+    return r;
+  };
+  const merge = (a: string, b: string) => {
+    const ra = root(a);
+    const rb = root(b);
+    if (ra === rb) return;
+    // Keep the node nearer the grid line, the border crossing, so both chunks still share its id.
+    const off = (v: number) => Math.abs(v - Math.round(v / chunkSize) * chunkSize);
+    const gap = (id: string) => {
+      const n = nodes.get(id)!;
+      return Math.min(off(n.x), off(n.z));
+    };
+    if (gap(ra) <= gap(rb)) merged.set(rb, ra);
+    else merged.set(ra, rb);
+  };
+
+  // A way clipped by the city boundary arrives as several roads; its edge ids keep counting.
+  const nextEdgeIndex = new Map<number, number>();
   for (const road of prepared) {
     const keyAt = (index: number) => {
       const p = road.pts[index];
@@ -71,7 +101,7 @@ export function buildRoadGraph(roads: GraphRoad[], chunkSize: number): RoadGraph
       return false;
     };
     let last = 0;
-    let edgeIndex = 0;
+    let edgeIndex = nextEdgeIndex.get(road.wayId) ?? 0;
     for (let i = 1; i < road.pts.length; i++) {
       if (!keyAt(i) && i !== road.pts.length - 1) continue;
       if (!keyAt(i)) continue;
@@ -79,7 +109,12 @@ export function buildRoadGraph(roads: GraphRoad[], chunkSize: number): RoadGraph
       if (slice.length >= 2) {
         const a = ensure(slice[0]);
         const b = ensure(slice[slice.length - 1]);
-        if (a !== b) {
+        let length = 0;
+        for (let k = 1; k < slice.length; k++) {
+          length += Math.hypot(slice[k][0] - slice[k - 1][0], slice[k][1] - slice[k - 1][1]);
+        }
+        if (a !== b && length < STUB_M) merge(a, b);
+        else if (a !== b) {
           edges.push({
             id: `w${road.wayId}:${edgeIndex}`,
             a,
@@ -94,9 +129,16 @@ export function buildRoadGraph(roads: GraphRoad[], chunkSize: number): RoadGraph
       }
       last = i;
     }
+    nextEdgeIndex.set(road.wayId, edgeIndex);
   }
 
-  return { nodes: [...nodes.values()], edges };
+  if (!merged.size) return { nodes: [...nodes.values()], edges };
+  const kept = edges
+    .map((e) => ({ ...e, a: root(e.a), b: root(e.b) }))
+    .filter((e) => e.a !== e.b);
+  const used = new Set<string>();
+  for (const e of kept) used.add(e.a).add(e.b);
+  return { nodes: [...nodes.values()].filter((n) => used.has(n.id)), edges: kept };
 }
 
 export type RoadIndex = {

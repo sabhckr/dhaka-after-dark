@@ -156,6 +156,43 @@ test("pinned simplification keeps a collinear T-junction vertex so the graph sta
   ]);
 });
 
+test("graph joins only shared vertices and numbers clipped parts of one way apart", () => {
+  const graph = buildRoadGraph(
+    [
+      // Way 1 and way 2 end 0.42 m apart, inside one metre cell, with no shared vertex: not a junction.
+      { wayId: 1, cls: "residential", oneway: 0, pts: [[10, 10.1], [60.1, 10.1]] },
+      { wayId: 2, cls: "residential", oneway: 0, pts: [[60.4, 10.4], [60.4, 90]] },
+      // Way 3 leaves and re-enters the boundary, so it arrives as two parts.
+      { wayId: 3, cls: "primary", oneway: 0, pts: [[100, 0], [150, 0]] },
+      { wayId: 3, cls: "primary", oneway: 0, pts: [[200, 0], [250, 0]] },
+    ],
+    500,
+  );
+  const end1 = graphNodeId(60.1, 10.1);
+  const end2 = graphNodeId(60.4, 10.4);
+  assert.notEqual(end1, end2);
+  assert.equal(graph.edges.filter((e) => e.a === end1 || e.b === end1).length, 1);
+  const ids = graph.edges.filter((e) => e.way === 3).map((e) => e.id);
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 2);
+});
+
+test("a junction two centimetres from a chunk border merges into the border node", () => {
+  const graph = buildRoadGraph(
+    [
+      { wayId: 1, cls: "primary", oneway: 0, pts: [[400, 100], [499.98, 100], [600, 100]] },
+      { wayId: 2, cls: "residential", oneway: 0, pts: [[499.98, 0], [499.98, 100]] },
+    ],
+    500,
+  );
+  const border = graphNodeId(500, 100);
+  assert.ok(graph.nodes.some((n) => n.id === border));
+  assert.ok(!graph.nodes.some((n) => n.id === graphNodeId(499.98, 100)));
+  assert.equal(graph.edges.filter((e) => e.a === border || e.b === border).length, 3);
+  const lengths = graph.edges.map((e) => e.pts.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - e.pts[i][0], p[1] - e.pts[i][1]), 0));
+  assert.ok(Math.min(...lengths) > 1);
+});
+
 test("cross-chunk road graph shares a boundary node id", () => {
   const graph = buildRoadGraph(
     [{ wayId: 42, cls: "primary", oneway: 0, pts: [[400, 100], [700, 250]] }],
