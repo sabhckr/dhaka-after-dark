@@ -1,10 +1,10 @@
 # World data schema v2
 
-Schema v2 adds what OSM says about buildings and roads, plus point and line features the game had no data for: signals, crossings, bus stops, lamps, landuse, walls and power lines. It changes nothing that v1 already had. Status on 2026-10-30: implemented and checked on a staged regeneration. `public/world` is still v1, and replacing it needs approval (see `docs/p2-record.md`).
+Schema v2 adds what OSM says about buildings and roads, plus point and line features the game had no data for: signals, crossings, bus stops, lamps, landuse, walls and power lines. It changes nothing that v1 already had. Status on 2026-10-30: implemented, checked on a staged regeneration, and shipped. `public/world` has been v2 since the swap commit `World data: schema v2` (see `docs/p2-record.md`). The pre-swap v1 files stay in git history, and two of them are kept as test fixtures in `src/geo/fixtures/`.
 
 ## Rules the format follows
 
-1. **v1 is untouched.** Every v1 record keeps its geometry, ids, order and key order. v2 attributes are appended after the v1 keys, and the new layers are separate arrays. `toV1(chunk)` (src/geo/compat.ts) strips them, and on the staged data it gives back each shipped chunk byte for byte.
+1. **v1 is untouched.** Every v1 record keeps its geometry, ids, order and key order. v2 attributes are appended after the v1 keys, and the new layers are separate arrays. `toV1(chunk)` (src/geo/compat.ts) strips them, and on the shipped data it gives back each pre-swap v1 chunk byte for byte.
 2. **Data is OSM only.** Every v2 field copies one OSM tag and is absent when the tag is missing or unreadable. Nothing in the files is inferred. The manifest's `fields` table names the tag behind each field and how many features carry it.
 3. **Rules live in code, labelled.** Where the game needs a value OSM does not give (levels, sidewalks, lanes, a district name), `src/geo/infer.ts` computes it at runtime and returns `{ value, src }` with `src` set to `osm`, `rule` or `default`. Each rule is documented in that file.
 4. **Readers accept both versions.** `validateChunk` and `validateManifest` accept v1 and v2. The chunk pipeline passes every chunk through `normalizeChunk`, which gives v1 chunks empty v2 layers, so code may read `chunk.points` without checking the version.
@@ -88,12 +88,14 @@ WORLD_OUT=<staging folder> node --max-old-space-size=3072 --experimental-strip-t
   scripts/geo/generate.ts data/raw/bangladesh.osm.pbf
 ```
 
-`WORLD_SCHEMA=1` writes v1. With it, the generator reproduces the shipped `public/world` exactly: all 1,298 chunks, `overview.json`, `coverage.json` and `landmarks.json` are byte-identical, and only the manifest's `generatedAt` differs. The generator refuses to write into `public/world` unless `WORLD_WRITE_PUBLIC=1` is set.
+`WORLD_SCHEMA=1` writes v1. With it, the generator reproduces the pre-swap v1 `public/world` exactly: all 1,298 chunks, `overview.json`, `coverage.json` and `landmarks.json` are byte-identical, and only the manifest's `generatedAt` differs. The generator refuses to write into `public/world` unless `WORLD_WRITE_PUBLIC=1` is set.
 
 ## Checking a staged run
 
+`diff-schema.ts` needs a v1 folder as its old side. Since the swap `public/world` is v2, so use a `WORLD_SCHEMA=1` run of the same extract, or the pre-swap tree from git (`git archive <commit before the swap> public/world | tar -x -C <dir>`).
+
 ```bash
-node --experimental-strip-types scripts/geo/diff-schema.ts public/world <stage> <report.json>
+node --experimental-strip-types scripts/geo/diff-schema.ts <v1 world> <stage> <report.json>
 node --experimental-strip-types scripts/geo/dump-osm-sample.ts data/raw/bangladesh.osm.pbf <stage> <osm.json> all
 python3 -I scripts/geo/check-v2-osm.py <osm.json> <report.json>
 node --expose-gc --experimental-strip-types scripts/geo/bench-format.ts public/world <stage> <bench.json> 5

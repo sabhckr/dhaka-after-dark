@@ -2,7 +2,7 @@
 
 How `public/world` is produced, what is hand-maintained, how a regeneration is checked before it replaces the shipped data, and how to roll it back. Every figure below was measured on 2026-10-30 on an Apple M1 with 8 GB of RAM. Nothing here is estimated unless it says so.
 
-> **Schema v2 (2026-10-30).** The generator now writes schema v2 by default and refuses to write into `public/world` without `WORLD_WRITE_PUBLIC=1`. `public/world` is still v1. The v2 format, its checks and the pending swap request are in [world-schema-v2.md](world-schema-v2.md) and [p2-record.md](p2-record.md).
+> **Schema v2 (2026-10-30).** The generator now writes schema v2 by default and refuses to write into `public/world` without `WORLD_WRITE_PUBLIC=1`. `public/world` is v2 since the swap commit `World data: schema v2`; the figures below describe the v1 data and generator before it. The v2 format, its checks and the swap record are in [world-schema-v2.md](world-schema-v2.md) and [p2-record.md](p2-record.md).
 
 ## Source
 

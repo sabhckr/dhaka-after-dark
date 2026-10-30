@@ -1,6 +1,6 @@
 # P2 world data v2: running record
 
-Branch `dev/engine-core` in the worktree `~/Documents/dhaka-after-dark-p1`. Nothing is pushed or merged. `public/world` has not been modified at any point in P2; every regeneration wrote to a staging folder.
+Branch `dev/engine-core` in the worktree `~/Documents/dhaka-after-dark-p1`. Nothing is pushed or merged. Every regeneration wrote to a staging folder. `public/world` was changed once, by the approved swap in 6ee2f27, from the validated staging copy.
 
 ## Status (2026-10-30)
 
@@ -10,10 +10,10 @@ Branch `dev/engine-core` in the worktree `~/Documents/dhaka-after-dark-p1`. Noth
 | Schema v2 types, OSM extraction, generator | Done | 18a6169, 8d88223 |
 | Validation, compatibility layer, runtime rules | Done | 18a6169 |
 | Migration tooling (diff, OSM check, swap list, benchmark) | Done | 8d88223, 3137e57, docs commit |
-| Tests | 17 new, all game tests pass | `npm test` TS suite: 135 of 135 |
+| Tests | 18 in `world-v2.test.ts`, all game tests pass | `npm test` TS suite: 136 of 136 after the swap |
 | Staged regeneration and checks | Done, all pass | Section "Verification" |
 | Benchmarks, old against new | Done | Section "Benchmarks" |
-| Replacing `public/world` with v2 | **Waiting for approval** | Section "Approval request" |
+| Replacing `public/world` with v2 | Done after approval, 6ee2f27 | Section "Swap" |
 | Rendering anything from v2 | Not started; P3, P4 and P6 work | |
 
 ## Audit
@@ -36,7 +36,8 @@ See `docs/world-schema-v2.md`. In short: additive only, OSM-only data with a sou
 | 8d88223 | `diff-schema.ts`, `dump-osm-sample.ts`, `check-v2-osm.py`; two parser bugs fixed |
 | d5e8e14 | Type error in `dump-osm-sample.ts`. 8d88223 was committed with it: the typecheck output went through a pipe that hid its exit code |
 | 3137e57 | Dev-only `?world=stage` switch, `/world-stage/` middleware, `bench-format.ts` |
-| (docs commit) | `swap-plan.mjs`, `p2-swap-plan.tsv`, `world-schema-v2.md`, this record |
+| ef37a7d | `swap-plan.mjs`, `p2-swap-plan.tsv`, `world-schema-v2.md`, this record |
+| 6ee2f27 | The swap: `public/world` is v2; two pre-swap v1 chunks kept as test fixtures |
 
 ## Verification
 
@@ -132,9 +133,38 @@ Every budget in `docs/budgets.json` passes for B. The differences are within the
 - **Coverage.** OSM coverage is thin for every field (6 % of buildings have levels, 5.7 % of roads have lanes). v2 does not fill the gaps. That is what the labelled rules are for.
 - **Staging copy.** The validated copy is at `~/Documents/dhaka-after-dark-staging/world-v2-2026-10-30`, with `SHA256SUMS` and the reports from its checks (`diff-final.json`, `geo-check-all.json`, `bench-format.json`, the generator log). The scratchpad copies under `/private/tmp` are not durable.
 
-## Approval request: replace generator files in `public/world` with v2
+## Swap (done 2026-10-30, commit 6ee2f27)
 
-Nothing below has been done. It needs your explicit approval.
+Approved by the user ("Approve the swap") and run as planned below, on `dev/engine-core` only. Not pushed.
+
+| Check | Result |
+|---|---|
+| Copied files against the TSV `new_sha256` | 1,308 of 1,308 match |
+| `signs/` and `assets/` | 595 files, hashes unchanged |
+| `git status` under `public/world` | exactly 1,300 modified and 6 new |
+| `diff-schema.ts`, pre-swap tree against `public/world` | PASS, 1,298 of 1,298 v1 views identical |
+| Tests, typecheck, lint, build | 136 of 136; 0; 0 errors (1 existing warning); 0 |
+| Golden views (`out/look/p2-swap`) | 27 of 27 the same against pre-swap v1 (`p2-v1`) and against staged v2 (`p2-v2`); 0 console errors |
+| In-game load, plain URL | 38 chunks from `/world/`, sampled chunks `v: 2`, manifest `v: 2` with `fields` and 1,303 chunks; 0 console errors |
+
+Two tests assumed the shipped data was v1 and failed after the copy. They were reworked, not loosened: `src/geo/fixtures/c_8_-29.v1.json` and `c_10_-20.v1.json` are the pre-swap files from git, and the tests now check that `toV1(shipped)` equals them byte for byte and that meshes, solids and the collision bucket built from the shipped chunk equal those built from its v1 form.
+
+**A/B after the swap.** One dev server, A = pre-swap v1 through `?world=stage`, B = shipped v2. 3 alternated rounds, medians over rounds. Report `out/look/perf-ab-swap.json` (gitignored).
+
+| | A: v1 | B: v2 |
+|---|---|---|
+| Steady median, 3 views | 16.7 / 16.7 / 16.7 ms | 16.7 / 16.7 / 16.7 ms |
+| Steady p99, 3 views | 17.6 / 17.6 / 17.6 ms | 17.6 / 17.4 / 17.6 ms |
+| Teleport to Old Dhaka: loaded / p99 / worst | 823 ms / 40.7 ms / 49.9 ms | 817 ms / 47.1 ms / 54.5 ms |
+| Teleport to Uttara: loaded / p99 / worst | 804 ms / 25.4 ms / 37.3 ms | 807 ms / 24.8 ms / 43.3 ms |
+| JS heap at the 3 views | 278 / 251 / 268 MB | 304 / 243 / 277 MB |
+| Draws at the 3 views | 158 / 96 / 141 | 152 / 95 / 136 |
+
+Every budget passes for B. Single rounds vary: A's round 1 had a 85 ms Old Dhaka teleport frame, and B's round 3 had one of 103 ms, above the 100 ms budget; the medians over rounds are 49.9 and 54.5 ms. This matches the spread seen in P1 and in the staged A/B above, so it is not attributed to v2, but it is noted.
+
+## Swap plan as approved
+
+Kept as the record of what was approved.
 
 **Source.** The validated staged regeneration, copied with a SHA-256 list to `~/Documents/dhaka-after-dark-staging/world-v2-2026-10-30` (outside every repository).
 
@@ -177,4 +207,4 @@ Generator-owned total: 91.58 MB → 94.30 MB (+3.0 %). Its `SHA256SUMS` lists al
 **Rollback.**
 
 - Before the commit: `git restore --source=HEAD --staged --worktree public/world`, then move the 6 added files to the Trash with `/usr/bin/trash`. Nothing else needs undoing.
-- After the commit: `git revert <swap commit>`. The code reads v1 and v2, so it needs no change, and the shipped v1 files stay in history at the commit before the swap.
+- After the commit (now): `git revert 6ee2f27`. The code reads v1 and v2, so it needs no change, and the shipped v1 files stay in history at the commit before the swap.
