@@ -509,3 +509,63 @@ test("scheduler fetches nearest chunks first and drops jobs the camera has left"
   assert.ok(loaded.includes("50_50"));
   s.dispose();
 });
+
+test("cells outside the dataset are never fetched", async () => {
+  const fetched: string[] = [];
+  const s = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 3,
+    maxConcurrent: 9,
+    exists: (ix) => ix >= 0,
+    fetchChunk: async (ix, iy) => {
+      fetched.push(`${ix}_${iy}`);
+      return { ix, iy };
+    },
+    onLoad: () => {},
+    onUnload: () => {},
+    onError: () => {},
+  });
+  s.update(0, 0);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(fetched.length, 6);
+  assert.ok(fetched.every((k) => !k.startsWith("-")));
+  assert.equal(s.loadingCount, 0);
+});
+
+test("a lead cell pulls its neighbourhood in after the focus ring, inside the unload radius only", async () => {
+  const order: string[] = [];
+  const s = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 4,
+    maxConcurrent: 1,
+    fetchChunk: async (ix, iy) => {
+      order.push(`${ix}_${iy}`);
+      return { ix, iy };
+    },
+    onLoad: () => {},
+    onUnload: () => {},
+    onError: () => {},
+  });
+  s.update(0, 0, { ix: 2, iy: 0 });
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 2));
+  assert.deepEqual(new Set(order.slice(0, 9)), new Set(["-1_-1", "0_-1", "1_-1", "-1_0", "0_0", "1_0", "-1_1", "0_1", "1_1"]));
+  for (const key of ["2_-1", "2_0", "2_1", "3_-1", "3_0", "3_1"]) assert.ok(order.includes(key), `${key} not prefetched`);
+  assert.equal(order.length, 15);
+  // A lead beyond the unload radius brings nothing in that would be unloaded at once.
+  const far: string[] = [];
+  const t = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 3,
+    maxConcurrent: 9,
+    fetchChunk: async (ix, iy) => {
+      far.push(`${ix}_${iy}`);
+      return { ix, iy };
+    },
+    onLoad: () => {},
+    onUnload: () => {},
+    onError: () => {},
+  });
+  t.update(0, 0, { ix: 3, iy: 0 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(far.every((k) => Number(k.split("_")[0]) <= 2), far.join(" "));
+});

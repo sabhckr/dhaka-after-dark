@@ -1156,3 +1156,64 @@ export function labelFromHit(hit: THREE.Intersection): string | null {
   }
   return null;
 }
+
+function ringArea(ring: number[]): number {
+  let twice = 0;
+  const n = ring.length / 2;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    twice += ring[i * 2] * ring[j * 2 + 1] - ring[j * 2] * ring[i * 2 + 1];
+  }
+  return Math.abs(twice) / 2;
+}
+
+export type FarPart = { material: THREE.Material; geometry: THREE.BufferGeometry };
+
+/**
+ * Stand-in for a chunk beyond the streamed ring: plain building masses (one
+ * wall quad per footprint edge, a flat roof) in the tints and materials a
+ * streamed chunk uses at the far LOD, for footprints of at least `minArea` m²,
+ * landmarks as the streamed ring draws them, and water. No setbacks, roof
+ * clutter, roads, collision, graphs or dressing. Geometries are returned by
+ * material for the caller to merge across chunks.
+ */
+export function buildFarMass(chunk: ChunkFile, lib: SurfaceLibrary, minArea: number): FarPart[] {
+  const walls = blank();
+  const roofs = blank();
+  const roofTint: Tint = [0.42, 0.4, 0.37];
+  for (const b of chunk.buildings) {
+    if (b.outer.length < 6) continue;
+    const site = heroSite(b.id);
+    if (site) {
+      const box = footprintSpan(b.outer);
+      const span = Math.max(box.sx, box.sz);
+      const drawH = heroDrawHeight(site, span);
+      const holes = containedHoles(b.outer, b.holes);
+      const label = `${site.name} · approximate ${drawH}m · way ${b.id}`;
+      addWalls(b.outer, 0, drawH, roofs, label, site.tint, 0, false, "mass");
+      for (const hole of holes) addWalls(hole, 0, drawH, roofs, label, site.tint, 0, false, "mass");
+      addFlat(b.outer, holes, drawH, roofs, label, site.roof, 10);
+      addHeroCrown(site.kind, b.outer, drawH, roofs, label, span);
+      continue;
+    }
+    if (ringArea(b.outer) < minArea) continue;
+    const rawSlot = facadeSlot(b.id, b.h) % lib.facades.length;
+    const tint: Tint = rawSlot >= 3 ? [0.92, 0.9, 0.86] : plasterTint(b.id, b.hs);
+    const shift = (hash32(b.id) % 1000) / 1000;
+    const label = `building ${b.id} ${b.hs} ${b.h}m`;
+    addWalls(b.outer, 0, b.h, walls, label, tint, shift, true, "mass");
+    addFlat(b.outer, undefined, b.h, roofs, label, roofTint, 10);
+  }
+  const water = blank();
+  for (const p of chunk.water) addFlat(p.outer, p.holes, 0.12, water, `water ${p.id}`, [0.5, 0.58, 0.56], 18);
+  const parts: FarPart[] = [];
+  for (const [surface, material] of [
+    [walls, lib.facades[0]],
+    [roofs, lib.roof],
+    [water, lib.water],
+  ] as const) {
+    const mesh = meshFrom(surface, material);
+    if (mesh) parts.push({ material, geometry: mesh.geometry });
+  }
+  return parts;
+}

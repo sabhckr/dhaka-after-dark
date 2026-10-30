@@ -17,7 +17,7 @@ import { GRADE, PALETTE } from "@/viewer/grade";
 import { buildDressing, type Dressing } from "@/viewer/dressing";
 import { LOOKS, LOOK_ORDER, easeLook, lerpLook, type LookId } from "@/viewer/looks";
 import { createCityMaterials, loadBanglaFont } from "@/viewer/materials";
-import { buildChunkObjects, labelFromHit, retileBuildings } from "@/viewer/meshes";
+import { buildChunkObjects, buildFarMass, labelFromHit, retileBuildings } from "@/viewer/meshes";
 import { BlockBatches } from "@/viewer/block-batch";
 import { pixelRatioCap, selectBuildingLod, treesHidden, type BuildingLod, type RenderQuality } from "@/viewer/lod";
 import { installViceGrade } from "@/viewer/post";
@@ -25,6 +25,7 @@ import { banglaHasInk } from "@/viewer/posters";
 import { mountIntegratedAssets } from "@/assets/street";
 import { createCityLife, type CityLife } from "@/npc/runtime";
 import { createCityTraffic } from "@/traffic/view";
+import { FarRing } from "@/engine/far-ring";
 import { IntegrationQueue } from "@/engine/integrate";
 import { censusScene, createFrameProbe, createStageTimer } from "@/viewer/perf";
 import { farPropsHidden } from "@/viewer/detail";
@@ -100,6 +101,8 @@ declare global {
       loads: () => ReturnType<typeof stages.report>;
       /** Fetched chunks still waiting to be joined into the scene. */
       queued: () => number;
+      /** Far-ring cells, merged blocks and triangles. */
+      far: () => ReturnType<FarRing["stats"]> & { queued: number };
       pause: (value: boolean) => void;
       halt: () => void;
       resume: () => void;
@@ -130,6 +133,26 @@ function makeRenderer(mount: HTMLDivElement) {
 
 /** Per-frame time for joining streamed chunks into the scene, collision and graphs. */
 const INTEGRATE_MS = 6;
+/** Per-frame time for far-ring work, spent only once the streamed ring has nothing queued. */
+const FAR_MS = 3;
+/** Streamed ring radius in chunks (5x5). The far ring starts outside it. */
+const LOAD_RADIUS = 2;
+/** Seconds of travel the streamer looks ahead when choosing what to fetch next. */
+const LEAD_S = 2.5;
+
+/** Far-ring outer radius in chunks: 6 reaches 3.25 km from the centre of the camera's chunk. */
+function farOuter(q: RenderQuality): number {
+  return q === "high" ? 6 : q === "medium" ? 4 : LOAD_RADIUS;
+}
+
+/**
+ * Smallest footprint the far ring keeps, by distance. Most Dhaka footprints are
+ * under 100 m²; keeping every one from 1.25 to 3.25 km out drew about 1.07M
+ * triangles around Kawran, so small ones drop out first where fog is thickest.
+ */
+function farMinArea(dist: number): number {
+  return dist <= 3 ? 60 : dist === 4 ? 100 : dist === 5 ? 160 : 250;
+}
 
 /** Chunk streaming cost by stage, read by window.__perf.loads(). */
 const stages = createStageTimer();
@@ -282,6 +305,9 @@ export function WorldView() {
       scene.add(rain);
       const blocks = new BlockBatches();
       scene.add(blocks.root);
+      const chunkFiles = new Set(manifest.chunks.map((c) => c.key));
+      const exists = (ix: number, iy: number) => chunkFiles.has(`${ix}_${iy}`);
+      const farQueue = new IntegrationQueue();
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
       const spawnOf = (id: string): Spawn => manifest.spawns.find((s) => s.id === id) || manifest.spawns[0];
@@ -367,6 +393,7 @@ export function WorldView() {
         lib.setQuality(q);
         life.setQuality(q);
         traffic.setQuality(q);
+        farRing.setOuter(farOuter(q));
         renderer.setPixelRatio(pixelRatioCap(q, window.devicePixelRatio || 1));
         renderer.setSize(mount.clientWidth || 1, mount.clientHeight || 1);
         for (const [key, bag] of bags) {
@@ -459,8 +486,19 @@ export function WorldView() {
         chunkGen.set(key, next);
         return next;
       };
+      const farRing = new FarRing({
+        inner: LOAD_RADIUS,
+        outer: farOuter(qualityRef.current),
+        exists,
+        fetchChunk,
+        build: (chunk, dist) => stages.time("far-build", () => buildFarMass(chunk, lib.surfaces, farMinArea(dist))),
+        enqueue: (task) => farQueue.push(task),
+        nearReady: (key) => bags.has(key),
+      });
+      scene.add(farRing.root);
       const scheduler = new ChunkScheduler({
-        loadRadius: 2,
+        exists,
+        loadRadius: LOAD_RADIUS,
         unloadRadius: 4,
         maxConcurrent: 3,
         fetchChunk,
@@ -565,6 +603,10 @@ export function WorldView() {
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2(0, 0);
       let pickAcc = 0;
+      let lastX = fly.x;
+      let lastZ = fly.z;
+      let velX = 0;
+      let velZ = 0;
 
       const onKey = (e: KeyboardEvent) => {
         if (e.type === "keydown") {
@@ -700,6 +742,7 @@ export function WorldView() {
         },
         loads: () => stages.report(),
         queued: () => integration.size,
+        far: () => ({ ...farRing.stats(), queued: farQueue.size }),
         summary: () => probe.summary(),
         census: () => censusScene(scene),
         batches: () => blocks.stats(),
@@ -838,7 +881,21 @@ export function WorldView() {
           rain.position.set(fly.x, fly.y, fly.z);
         }
         const here = worldToChunk(fly.x, fly.z, manifest.chunkSize);
-        scheduler.update(here.ix, here.iy);
+        // Look ahead along recent travel; a jump of more than 60 m in one frame is a teleport, not travel.
+        const moved = Math.hypot(fly.x - lastX, fly.z - lastZ);
+        if (dt > 0 && moved < 60) {
+          const k = Math.min(1, dt * 3);
+          velX += ((fly.x - lastX) / dt - velX) * k;
+          velZ += ((fly.z - lastZ) / dt - velZ) * k;
+        } else if (moved >= 60) {
+          velX = 0;
+          velZ = 0;
+        }
+        lastX = fly.x;
+        lastZ = fly.z;
+        const lead = worldToChunk(fly.x + velX * LEAD_S, fly.z + velZ * LEAD_S, manifest.chunkSize);
+        scheduler.update(here.ix, here.iy, lead);
+        farRing.update(here.ix, here.iy);
         if (here.ix !== detailCell.ix || here.iy !== detailCell.iy) {
           detailCell = here;
           paintProps(here.ix, here.iy);
@@ -858,6 +915,7 @@ export function WorldView() {
           retiled = true;
         }
         integration.run(INTEGRATE_MS, (err) => errors.push(`integrate: ${err instanceof Error ? err.message : String(err)}`));
+        if (integration.size === 0) farQueue.run(FAR_MS, (err) => errors.push(`far ring: ${err instanceof Error ? err.message : String(err)}`));
         const renderT0 = performance.now();
         renderer.render(scene, camera);
         probe.noteRender(performance.now() - renderT0);
@@ -875,7 +933,7 @@ export function WorldView() {
           raycaster.far = 600;
           const pickables: THREE.Object3D[] = [];
           for (const child of scene.children) {
-            if (child === blocks.root || child === ground || child === sky || child === rain) continue;
+            if (child === blocks.root || child === farRing.root || child === ground || child === sky || child === rain) continue;
             if (child.name.startsWith("chunk-")) continue;
             pickables.push(child);
           }
@@ -955,6 +1013,8 @@ export function WorldView() {
         renderer.setAnimationLoop(null);
         scheduler.dispose();
         integration.clear();
+        farRing.dispose();
+        farQueue.clear();
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keyup", onKey);
         window.removeEventListener("blur", onBlur);

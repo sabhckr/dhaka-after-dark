@@ -21,6 +21,8 @@ export type SchedulerOptions = {
   onLoad: (key: string, ix: number, iy: number, data: unknown | null) => void;
   onUnload: (key: string) => void;
   onError: (key: string, error: Error) => void;
+  /** Cells the dataset has a file for. Cells outside it are never fetched (they would 404). */
+  exists?: (ix: number, iy: number) => boolean;
 };
 
 /**
@@ -33,6 +35,9 @@ export type SchedulerOptions = {
  * (outside the load radius) are dropped. A fetch that lands after the camera
  * moved past the unload radius is discarded instead of being built and then
  * unloaded on the next frame.
+ * With a `lead` cell (where the camera will be shortly), cells around it are
+ * requested too, after the ones around the focus, as long as they sit inside
+ * the unload radius, so travel finds them loaded instead of fogged.
  */
 export class ChunkScheduler {
   readonly loaded = new Set<string>();
@@ -47,6 +52,7 @@ export class ChunkScheduler {
   private active = 0;
   private disposed = false;
   focus: ChunkCoord = { ix: 0, iy: 0 };
+  lead: ChunkCoord | null = null;
 
   constructor(opts: SchedulerOptions) {
     this.opts = opts;
@@ -56,13 +62,22 @@ export class ChunkScheduler {
     return this.loading.size + this.pending.length;
   }
 
-  update(ix: number, iy: number): void {
+  update(ix: number, iy: number, lead: ChunkCoord | null = null): void {
     if (this.disposed) return;
     this.focus = { ix, iy };
+    this.lead = lead && (lead.ix !== ix || lead.iy !== iy) ? lead : null;
     const r = this.opts.loadRadius;
     for (let y = iy - r; y <= iy + r; y++) {
       for (let x = ix - r; x <= ix + r; x++) {
         if (chebyshev({ ix, iy }, { ix: x, iy: y }) <= r) this.request(x, y);
+      }
+    }
+    const ahead = this.lead;
+    if (ahead) {
+      for (let y = ahead.iy - r; y <= ahead.iy + r; y++) {
+        for (let x = ahead.ix - r; x <= ahead.ix + r; x++) {
+          if (this.wanted({ ix: x, iy: y })) this.request(x, y);
+        }
       }
     }
     this.pump();
@@ -72,7 +87,15 @@ export class ChunkScheduler {
     }
   }
 
+  /** In the load radius of the focus, or of the lead while still inside the unload radius. */
+  private wanted(cell: ChunkCoord): boolean {
+    const r = this.opts.loadRadius;
+    if (chebyshev(this.focus, cell) <= r) return true;
+    return this.lead !== null && chebyshev(this.lead, cell) <= r && chebyshev(this.focus, cell) < this.opts.unloadRadius;
+  }
+
   private request(ix: number, iy: number): void {
+    if (this.opts.exists && !this.opts.exists(ix, iy)) return;
     const key = chunkKey(ix, iy);
     if (this.loaded.has(key) || this.loading.has(key) || this.queued.has(key) || this.dead.has(key)) return;
     this.queued.add(key);
@@ -90,7 +113,7 @@ export class ChunkScheduler {
       const key = chunkKey(job.ix, job.iy);
       this.queued.delete(key);
       if (this.loaded.has(key) || this.dead.has(key) || this.disposed) continue;
-      if (chebyshev(this.focus, job) > this.opts.loadRadius) continue;
+      if (!this.wanted(job)) continue;
       this.loading.add(key);
       this.active++;
       this.opts
