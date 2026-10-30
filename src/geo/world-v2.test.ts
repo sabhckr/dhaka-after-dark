@@ -350,11 +350,13 @@ test("validation accepts v1 and v2, rejects bad v2 values and unknown versions",
 
 test("manifest v2 needs a source for every field", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(SHIPPED, "manifest.json"), "utf8"));
-  assert.deepEqual(validateManifest(manifest), [], "shipped v1 manifest still validates");
-  assert.ok(validateManifest({ ...manifest, v: 2 }).includes("fields"));
+  assert.deepEqual(validateManifest(manifest), [], "shipped manifest validates");
+  const { fields: _fields, ...noFields } = manifest;
+  assert.deepEqual(validateManifest({ ...noFields, v: 1 }), [], "a v1 manifest needs no fields");
+  assert.ok(validateManifest({ ...noFields, v: 2 }).includes("fields"));
   assert.deepEqual(
     validateManifest({
-      ...manifest,
+      ...noFields,
       v: 2,
       fields: [{ field: "roads.ln", src: "osm", tags: ["lanes"], count: 3 }],
     }),
@@ -362,7 +364,7 @@ test("manifest v2 needs a source for every field", () => {
   );
   assert.ok(
     validateManifest({
-      ...manifest,
+      ...noFields,
       v: 2,
       fields: [{ field: "roads.ln", src: "guess", tags: [], count: 3 }],
     }).includes("field roads.ln"),
@@ -386,35 +388,56 @@ test("normalize gives v1 chunks empty v2 layers without touching the original", 
 
 // Shipped chunks: read-only. Around Kawran Bazar, Old Dhaka, Gulshan and Uttara.
 const REAL_CHUNKS = ["8_-29", "10_-20", "13_-35", "8_-55"];
+// The same Kawran Bazar and Old Dhaka chunks as shipped in v1, before the v2 swap.
+const V1_FIXTURES = ["8_-29", "10_-20"];
+const fixture = (key: string) =>
+  fs.readFileSync(path.join(ROOT, "src/geo/fixtures", `c_${key}.v1.json`), "utf8");
 
-test("shipped v1 chunks load, normalise and round-trip byte for byte", () => {
+test("shipped chunks load and normalise", () => {
   let checked = 0;
   for (const key of REAL_CHUNKS) {
     const file = path.join(SHIPPED, "chunks", `c_${key}.json`);
     if (!fs.existsSync(file)) continue;
-    const text = fs.readFileSync(file, "utf8");
-    const chunk = JSON.parse(text) as ChunkFile;
+    const chunk = JSON.parse(fs.readFileSync(file, "utf8")) as ChunkFile;
     assert.deepEqual(validateChunk(chunk), [], key);
-    const n = normalizeChunk(chunk);
-    assert.deepEqual(validateChunk(n), [], key);
-    assert.equal(JSON.stringify(toV1(n)), text, `${key} round trip`);
+    assert.deepEqual(validateChunk(normalizeChunk(chunk)), [], key);
     checked++;
   }
   assert.ok(checked >= 3, `only ${checked} sample chunks exist`);
 });
 
-test("runtime consumers read a v2-shaped chunk exactly as its v1 form", () => {
-  for (const key of REAL_CHUNKS.slice(0, 2)) {
-    const file = path.join(SHIPPED, "chunks", `c_${key}.json`);
-    if (!fs.existsSync(file)) continue;
-    const v1 = JSON.parse(fs.readFileSync(file, "utf8")) as ChunkFile;
-    const v2 = upgradeV1(v1);
+test("v1 chunks still load, and the shipped chunk's v1 view is the v1 file byte for byte", () => {
+  for (const key of V1_FIXTURES) {
+    const text = fixture(key);
+    const v1 = JSON.parse(text) as ChunkFile;
+    assert.equal(v1.v, 1);
+    assert.deepEqual(validateChunk(v1), [], key);
+    assert.deepEqual(validateChunk(normalizeChunk(v1)), [], key);
+    assert.equal(JSON.stringify(toV1(normalizeChunk(v1))), text, `${key} v1 round trip`);
+    const shipped = fs.readFileSync(path.join(SHIPPED, "chunks", `c_${key}.json`), "utf8");
+    assert.equal(
+      JSON.stringify(toV1(JSON.parse(shipped) as ChunkFile)),
+      text,
+      `${key} shipped v1 view`,
+    );
+  }
+});
+
+test("runtime consumers read the shipped chunk exactly as its v1 form", () => {
+  for (const key of V1_FIXTURES) {
+    const v1 = JSON.parse(fixture(key)) as ChunkFile;
+    const v2 = normalizeChunk(
+      JSON.parse(
+        fs.readFileSync(path.join(SHIPPED, "chunks", `c_${key}.json`), "utf8"),
+      ) as ChunkFile,
+    );
     assert.deepEqual(planChunk(v2), planChunk(v1), `${key} pedestrian plan`);
     assert.deepEqual(solidsFromChunk(v2).plans, solidsFromChunk(v1).plans, `${key} foot plans`);
     const a = solidsFromChunk(v2).bucket;
     const b = solidsFromChunk(v1).bucket;
     assert.ok(b.walls.length > 0, `${key} has collision walls`);
     assert.deepEqual(a, b, `${key} collision`);
+    assert.deepEqual(planChunk(upgradeV1(v1)), planChunk(v1), `${key} upgraded v1`);
   }
 });
 
