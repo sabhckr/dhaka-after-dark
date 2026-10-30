@@ -468,3 +468,12 @@ test("the generator refuses to write into shipped world data without the flag", 
   assert.equal(worldOutRefusal("/tmp/stage", root, {}), null);
   assert.equal(worldOutRefusal("/repo/public/world", root, { WORLD_WRITE_PUBLIC: "1" }), null);
 });
+
+test("only the dev server can switch to staged world data", async () => {
+  const { worldDataBase } = await import("./world-url.ts");
+  assert.equal(worldDataBase("?world=stage", true), "/world-stage");
+  assert.equal(worldDataBase("?quality=high&world=stage", true), "/world-stage");
+  assert.equal(worldDataBase("?world=stage", false), "/world");
+  assert.equal(worldDataBase("?world=../etc", true), "/world");
+  assert.equal(worldDataBase("", true), "/world");
+});

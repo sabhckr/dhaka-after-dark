@@ -24,6 +24,7 @@ import { mountIntegratedAssets } from "@/assets/street";
 import { createCityLife, type CityLife } from "@/npc/runtime";
 import { createCityTraffic } from "@/traffic/view";
 import { createChunkPipeline, type ChunkPipeline } from "@/engine/chunk-pipeline";
+import { worldDataUrl } from "@/geo/world-url";
 import { censusScene, createFrameProbe, type StageRow } from "@/viewer/perf";
 import { farPropsHidden } from "@/viewer/detail";
 
@@ -161,7 +162,7 @@ export function WorldView() {
     let cancel = false;
     (async () => {
       try {
-        const res = await fetch("/world/manifest.json");
+        const res = await fetch(worldDataUrl("manifest.json"));
         if (!res.ok) throw new Error("Map manifest is missing");
         const data = (await res.json()) as Manifest;
         if (cancel) return;
@@ -623,7 +624,7 @@ export function WorldView() {
         resume: () => renderer.setAnimationLoop(loop),
       };
 
-      fetch("/world/overview.json")
+      fetch(worldDataUrl("overview.json"))
         .then((r) => (r.ok ? r.json() : null))
         .then((data: Overview | null) => {
           overviewRef.data = data;

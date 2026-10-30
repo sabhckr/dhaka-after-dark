@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { ChunkCoord } from "../geo/chunks.ts";
 import { normalizeChunk } from "../geo/compat.ts";
+import { worldDataUrl } from "../geo/world-url.ts";
 import type { ShopRec } from "../geo/shops.ts";
 import { ChunkScheduler, releaseChunkResources, type ReleaseBag } from "../geo/streaming.ts";
 import type { ChunkFile } from "../geo/types.ts";
@@ -66,7 +67,7 @@ async function fetchChunk(
   iy: number,
   stages: ReturnType<typeof createStageTimer>,
 ): Promise<ChunkFile | null> {
-  const res = await fetch(`/world/chunks/c_${ix}_${iy}.json`);
+  const res = await fetch(worldDataUrl(`chunks/c_${ix}_${iy}.json`));
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Chunk ${ix}_${iy} failed (${res.status})`);
   let data: unknown;

@@ -34,7 +34,10 @@ export async function launch({ reducedMotion = "no-preference" } = {}) {
 /** Opens the world at High quality and waits for the first ring to finish loading. */
 export async function boot(page, url) {
   const t0 = Date.now();
-  await page.goto(`${url.replace(/\/$/, "")}/?quality=high`, {
+  // Keep any query the caller passed (?world=stage) and add the quality.
+  const target = new URL(url);
+  target.searchParams.set("quality", "high");
+  await page.goto(target.href, {
     waitUntil: "domcontentloaded",
     timeout: 90000,
   });
