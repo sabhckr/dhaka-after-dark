@@ -43,7 +43,11 @@ for (const f of fs.readdirSync(path.join(WORLD, "chunks")).sort()) {
       if (!byKind[`${kind}Bare`].has(id)) byKind[`${kind}Bare`].set(id, {});
       return;
     }
-    if (!byKind[kind].has(id)) byKind[kind].set(id, v1 ? attrs : { t: (rec as { t: string }).t });
+    if (!byKind[kind].has(id))
+      byKind[kind].set(
+        id,
+        v1 ? (attrs as Record<string, unknown>) : { t: (rec as { t: string }).t },
+      );
   };
   for (const r of c.roads) keep("roads", r.id, r, V1_ROAD);
   for (const b of c.buildings) keep("buildings", b.id, b, V1_BUILDING);
