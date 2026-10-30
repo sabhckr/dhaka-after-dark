@@ -18,9 +18,11 @@ import { isNamedShop, shopTags, type ShopRec } from "../../src/geo/shops.ts";
 const require = createRequire(import.meta.url);
 const parseOSM = require("osm-pbf-parser") as () => NodeJS.ReadWriteStream;
 
-const PBF = process.argv[2] || "/workspace/data/raw/bangladesh.osm.pbf";
-const OUT = "/workspace/public/world/signs";
-const OVERVIEW = "/workspace/public/world/overview.json";
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const WORLD = process.env.WORLD_OUT || path.join(ROOT, "public/world");
+const PBF = process.argv[2] || path.join(ROOT, "data/raw/bangladesh.osm.pbf");
+const OUT = path.join(WORLD, "signs");
+const OVERVIEW = path.join(WORLD, "overview.json");
 const RETRIEVED = "2026-10-29";
 const PBF_NOTE = "Geofabrik Bangladesh extract dated 2026-10-28, file bangladesh.osm.pbf";
 

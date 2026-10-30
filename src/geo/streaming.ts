@@ -29,6 +29,10 @@ export type SchedulerOptions = {
  * The gap between those radii stops load/unload flicker on a chunk edge.
  * In-flight keys are not requested twice. A chunk that 404s is cached as empty.
  * A chunk that throws is retried once, then marked dead until `resetFailures`.
+ * Queued work is taken nearest-first, and jobs the camera has already left
+ * (outside the load radius) are dropped. A fetch that lands after the camera
+ * moved past the unload radius is discarded instead of being built and then
+ * unloaded on the next frame.
  */
 export class ChunkScheduler {
   readonly loaded = new Set<string>();
@@ -61,6 +65,7 @@ export class ChunkScheduler {
         if (chebyshev({ ix, iy }, { ix: x, iy: y }) <= r) this.request(x, y);
       }
     }
+    this.pump();
     for (const key of [...this.loaded]) {
       const [x, y] = key.split("_").map(Number);
       if (chebyshev({ ix, iy }, { ix: x, iy: y }) >= this.opts.unloadRadius) this.unload(key);
@@ -72,22 +77,27 @@ export class ChunkScheduler {
     if (this.loaded.has(key) || this.loading.has(key) || this.queued.has(key) || this.dead.has(key)) return;
     this.queued.add(key);
     this.pending.push({ ix, iy });
-    this.pump();
   }
 
   private pump(): void {
     const max = this.opts.maxConcurrent ?? 3;
     while (this.active < max && this.pending.length) {
-      const job = this.pending.shift()!;
+      let best = 0;
+      for (let i = 1; i < this.pending.length; i++) {
+        if (chebyshev(this.focus, this.pending[i]) < chebyshev(this.focus, this.pending[best])) best = i;
+      }
+      const job = this.pending.splice(best, 1)[0];
       const key = chunkKey(job.ix, job.iy);
       this.queued.delete(key);
       if (this.loaded.has(key) || this.dead.has(key) || this.disposed) continue;
+      if (chebyshev(this.focus, job) > this.opts.loadRadius) continue;
       this.loading.add(key);
       this.active++;
       this.opts
         .fetchChunk(job.ix, job.iy)
         .then((data) => {
           if (this.disposed) return;
+          if (chebyshev(this.focus, job) >= this.opts.unloadRadius) return;
           this.loaded.add(key);
           if (data == null) this.empty.add(key);
           this.opts.onLoad(key, job.ix, job.iy, data);
@@ -97,6 +107,7 @@ export class ChunkScheduler {
           this.attempts.set(key, n);
           const err = e instanceof Error ? e : new Error(String(e));
           this.errors.push({ key, message: err.message });
+          if (this.errors.length > 32) this.errors.shift();
           this.opts.onError(key, err);
           if (n >= 2) this.dead.add(key);
         })

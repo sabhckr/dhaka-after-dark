@@ -110,3 +110,35 @@ Low at the same 32 chunks cut rendered triangles from 518k to 362k and tree inst
 ### Still expensive
 
 Per-chunk building meshes, pedestrian clones (about eight meshes each), and the 146-mesh asset yard when the Sangsad pad is on screen. A merged building mesh would cut draws and would also shade every off-screen wall. That was left undone on purpose.
+
+## 2026-10-30 hardware GPU, streaming route
+
+First runs on a real GPU. Machine: Apple M1 (MacBook Air, 8 GB), `ANGLE (Apple, ANGLE Metal Renderer: Apple M1)`, installed Google Chrome headless, 1600×900, DPR 1, quality high, day, clear. Headless Chrome is capped at 60 Hz, so the median is the vsync interval. These runs measure **streaming stalls**. They are not a 90 FPS result, and the M1 Air is not the reference PC.
+
+Route: `node scripts/bench-stream.mjs <url> <out.json> 45 <label>`. The camera flies from Motijheel `(6688, 28, -11384)` north at 40 m/s for 45 s (1.8 km, about four chunk rows), so chunks stream the whole time. Frame gaps come from an rAF probe in the page. A and B ran alternately against two dev servers: untouched `main` (c534279) and this branch.
+
+| Build | Avg FPS | p95 | p99 | Max | Frames > 50 ms | > 250 ms | Time in > 50 ms frames |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| main, run 1 | 28.2 | 83 ms | 317 ms | 1183 ms | 116 | 24 | 19.5 s |
+| main, run 2 | 32.4 | 67 ms | 317 ms | 1350 ms | 102 | 21 | 18.1 s |
+| main, run 3 | 36.9 | 50 ms | 217 ms | 1400 ms | 81 | 15 | 14.6 s |
+| branch, run 1 | 49.0 | 17 ms | 133 ms | 933 ms | 36 | 8 | 7.9 s |
+| branch, run 2 | 46.3 | 33 ms | 167 ms | 1050 ms | 51 | 7 | 9.8 s |
+
+No console errors in any run. The end state was 30 chunks loaded, about 97 draws and 518k triangles.
+
+What changed:
+
+- `SolidWorld` indexes each chunk once on load. It used to re-index every loaded chunk on the first query after any change.
+- `BlockBatches.absorb` rebuilds each touched merged mesh once per chunk instead of once per absorbed mesh.
+- The scheduler takes queued chunks nearest first and drops jobs outside the load radius. A fetch that lands beyond the unload radius is discarded.
+- Each chunk build carries a generation number, so an unload and reload during the signs fetch cannot leave two copies of a chunk.
+- Picking raycasts the chunks around the camera and the actors, not every loaded mesh.
+- `solidsFromChunk` is memoised per chunk object. Load used to compute it twice.
+
+Still on the main thread, and the likely source of the remaining 0.9–1 s stalls (not yet profiled one by one):
+
+- JSON parse and validation
+- `buildChunkObjects` and `buildDressing`
+- `PedNav.rebuild` over every loaded chunk, which also clears every NPC path
+- the full `rebuildEdges` road index

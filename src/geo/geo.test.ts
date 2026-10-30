@@ -8,9 +8,13 @@ import { buildRoadGraph, graphNodeId, indexEdges, nearestRoad } from "./graph.ts
 import {
   clipPolygonToRect,
   clipPolylineToRect,
+  douglasPeucker,
+  douglasPeuckerPinned,
   nudgeVerifiedCurves,
   pointInRing,
   splitPolylineByChunks,
+  vertexKey,
+  type XZ,
 } from "./geometry.ts";
 import { ChunkScheduler, releaseChunkResources } from "./streaming.ts";
 import { validateChunk, validateManifest } from "./validate.ts";
@@ -104,6 +108,52 @@ test("polygon clip keeps area inside the rectangle", () => {
   }
   assert.ok(pointInRing(480, 100, clipped));
   assert.equal(pointInRing(520, 100, clipped), false);
+});
+
+test("pinned simplification keeps a collinear T-junction vertex so the graph stays connected", () => {
+  // Through road along z=100 with the T node at x=150 sitting exactly on the line.
+  const through: XZ[] = [
+    [100, 100],
+    [150, 100],
+    [200, 100],
+  ];
+  const stem: XZ[] = [
+    [150, 100],
+    [150, 160],
+  ];
+  // Plain DP drops the collinear vertex and the stem end no longer meets a vertex.
+  assert.equal(douglasPeucker(through, 0.3).length, 2);
+  const junctions = new Set([vertexKey(150, 100)]);
+  const isJunction = (p: XZ) => junctions.has(vertexKey(p[0], p[1]));
+  const kept = douglasPeuckerPinned(through, 0.3, isJunction);
+  assert.deepEqual(kept, through);
+  const graph = buildRoadGraph(
+    [
+      { wayId: 1, cls: "primary", oneway: 0, pts: kept },
+      { wayId: 2, cls: "residential", oneway: 0, pts: douglasPeuckerPinned(stem, 0.3, isJunction) },
+    ],
+    500,
+  );
+  const tNode = graphNodeId(150, 100);
+  assert.equal(graph.edges.filter((e) => e.a === tNode || e.b === tNode).length, 3);
+  // Unpinned points between pins still simplify, and both ends always survive.
+  const wiggle: XZ[] = [
+    [0, 0],
+    [10, 0.05],
+    [20, 0],
+    [30, 0.05],
+    [40, 0],
+  ];
+  const pinMid = (p: XZ) => p[0] === 20;
+  assert.deepEqual(douglasPeuckerPinned(wiggle, 0.3, pinMid), [
+    [0, 0],
+    [20, 0],
+    [40, 0],
+  ]);
+  assert.deepEqual(douglasPeuckerPinned(wiggle, 0.3, () => false), [
+    [0, 0],
+    [40, 0],
+  ]);
 });
 
 test("cross-chunk road graph shares a boundary node id", () => {
@@ -389,4 +439,36 @@ test("hysteresis does not unload a chunk still inside the keep radius", async ()
   assert.equal(unloaded.length, 0);
   assert.ok(s.loaded.has("-1_0"));
   assert.ok(fetched.length >= before);
+});
+
+test("scheduler fetches nearest chunks first and drops jobs the camera has left", async () => {
+  const order: string[] = [];
+  const loaded: string[] = [];
+  const s = new ChunkScheduler({
+    loadRadius: 1,
+    unloadRadius: 3,
+    maxConcurrent: 1,
+    fetchChunk: async (ix, iy) => {
+      order.push(`${ix}_${iy}`);
+      await new Promise((r) => setTimeout(r, 2));
+      return { ix, iy };
+    },
+    onLoad: (key) => loaded.push(key),
+    onUnload: () => {},
+    onError: () => {},
+  });
+  s.update(0, 0);
+  assert.equal(order[0], "0_0");
+  // Fly far away before the queue drains: the old neighbourhood is not fetched.
+  s.update(50, 50);
+  await new Promise((r) => setTimeout(r, 120));
+  const stale = order.slice(1).filter((key) => {
+    const [x, y] = key.split("_").map(Number);
+    return Math.max(Math.abs(x - 50), Math.abs(y - 50)) > 1;
+  });
+  assert.deepEqual(stale, []);
+  // The first fetch landed after the move, beyond the unload radius, so it is not kept.
+  assert.equal(s.loaded.has("0_0"), false);
+  assert.ok(loaded.includes("50_50"));
+  s.dispose();
 });

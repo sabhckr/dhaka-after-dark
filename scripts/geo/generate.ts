@@ -27,7 +27,16 @@ import {
   railElevation,
 } from "../../src/geo/classify.ts";
 import { WORLD_ORIGIN, lonLatToWorld, worldToLonLat } from "../../src/geo/crs.ts";
-import { CoverageMask, douglasPeucker, pointInPolys, ringArea, type PolyRings, type XZ } from "../../src/geo/geometry.ts";
+import {
+  CoverageMask,
+  douglasPeucker,
+  douglasPeuckerPinned,
+  pointInPolys,
+  ringArea,
+  vertexKey,
+  type PolyRings,
+  type XZ,
+} from "../../src/geo/geometry.ts";
 import { indexEdges, nearestRoad, type GraphEdge } from "../../src/geo/graph.ts";
 import type { Manifest, Spawn } from "../../src/geo/types.ts";
 
@@ -37,8 +46,10 @@ const polygonClipping = require("polygon-clipping") as {
   intersection: (a: number[][][][], b: number[][][][]) => number[][][][];
 };
 
-const PBF = process.argv[2] || "/workspace/data/raw/bangladesh.osm.pbf";
-const OUT = "/workspace/public/world";
+// Repo-relative, so the README command writes into this checkout (it used to be /workspace).
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const PBF = process.argv[2] || path.join(ROOT, "data/raw/bangladesh.osm.pbf");
+const OUT = process.env.WORLD_OUT || path.join(ROOT, "public/world");
 const RETRIEVED = "2026-10-29";
 
 type Tags = Record<string, string>;
@@ -621,13 +632,41 @@ async function main() {
     if (used) for (const m of rel.members) if (m.type === "way") consumed.add(m.id);
   }
 
+  // Road vertices used by two or more road ways are junctions. Simplification
+  // must keep them, or a T whose node is collinear on the through road loses the
+  // shared vertex and the graph splits there.
+  const roadNodeUse = new Map<number, number>();
+  for (const way of ways) {
+    if (consumed.has(way.id) || !way.tags || way.tags.building === "part" || isBuilding(way.tags)) continue;
+    const road = classifyRoad(way.tags);
+    if (!road || road.area) continue;
+    const seen = new Set<number>();
+    for (const ix of way.refs) {
+      if (ix < 0 || seen.has(ix)) continue;
+      seen.add(ix);
+      roadNodeUse.set(ix, (roadNodeUse.get(ix) || 0) + 1);
+    }
+  }
+  const junctionKeys = new Set<string>();
+  for (const [ix, n] of roadNodeUse) {
+    if (n < 2) continue;
+    const [x, z] = nodes.world(ix);
+    junctionKeys.add(vertexKey(x, z));
+  }
+  roadNodeUse.clear();
+  const isJunction = (p: XZ) => junctionKeys.has(vertexKey(p[0], p[1]));
+  log(`road junction vertices pinned ${junctionKeys.size}`);
+
   const majorRoads: { cls: string; pts: XZ[] }[] = [];
   for (const way of ways) {
     if (consumed.has(way.id)) continue;
     const tags = way.tags;
     if (!tags) continue;
     if (tags.building === "part") continue;
-    const lines = linesFromRefs(way.refs, nodes).map((l) => douglasPeucker(l, 0.3));
+    const roadLike = !isBuilding(tags) && classifyRoad(tags) != null;
+    const lines = linesFromRefs(way.refs, nodes).map((l) =>
+      roadLike ? douglasPeuckerPinned(l, 0.3, isJunction) : douglasPeucker(l, 0.3),
+    );
     if (isBuilding(tags)) {
       for (const line of lines) {
         if (!closeEnough(line)) {
@@ -672,7 +711,7 @@ async function main() {
           continue;
         }
         for (const part of clipLine(line, inside, grid, mask)) {
-          const pts = douglasPeucker(part, 0.4);
+          const pts = douglasPeuckerPinned(part, 0.4, isJunction);
           if (pts.length < 2) continue;
           features.push({
             kind: "road",

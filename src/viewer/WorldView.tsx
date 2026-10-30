@@ -432,12 +432,22 @@ export function WorldView() {
         return signKeys;
       };
 
+      // Bumped on every load and unload. A build that finishes for an older
+      // generation is thrown away, so an unload + reload during the signs fetch
+      // cannot leave two copies of one chunk in the scene.
+      const chunkGen = new Map<string, number>();
+      const bumpGen = (key: string) => {
+        const next = (chunkGen.get(key) ?? 0) + 1;
+        chunkGen.set(key, next);
+        return next;
+      };
       const scheduler = new ChunkScheduler({
         loadRadius: 2,
         unloadRadius: 4,
         maxConcurrent: 3,
         fetchChunk,
         onLoad: (key, ix, iy, data) => {
+          const gen = bumpGen(key);
           if (!data) return;
           const chunk = data as ChunkFile;
           try {
@@ -461,7 +471,7 @@ export function WorldView() {
                 /* optional sidecar */
               }
             }
-            if (dead || !scheduler.loaded.has(key)) return;
+            if (dead || !scheduler.loaded.has(key) || chunkGen.get(key) !== gen) return;
             let built: ReturnType<typeof buildChunkObjects>;
             try {
               const dist = Math.max(Math.abs(ix - scheduler.focus.ix), Math.abs(iy - scheduler.focus.iy));
@@ -486,7 +496,7 @@ export function WorldView() {
               if (errors.length > 6) errors.shift();
               return;
             }
-            if (dead || !scheduler.loaded.has(key)) {
+            if (dead || !scheduler.loaded.has(key) || chunkGen.get(key) !== gen) {
               blocks.drop(key);
               releaseChunkResources(built);
               return;
@@ -507,6 +517,7 @@ export function WorldView() {
           })();
         },
         onUnload: (key) => {
+          bumpGen(key);
           life.onUnload(key);
           traffic.onUnload(key);
           solids.deleteChunk(key);
@@ -814,8 +825,23 @@ export function WorldView() {
         pickAcc += dt;
         if (pickAcc > 0.25) {
           pickAcc = 0;
+          // Pick against the chunks around the camera and the actors, not the whole
+          // loaded city: three.js tests every triangle of a mesh whose bounds the
+          // ray crosses, and the merged road/ground batches span the loaded set.
+          // (Merged batches carry no labels, so they never named a hit anyway.)
           raycaster.setFromCamera(pointer, camera);
-          const hits = raycaster.intersectObjects(scene.children, true);
+          raycaster.far = 600;
+          const pickables: THREE.Object3D[] = [];
+          for (const child of scene.children) {
+            if (child === blocks.root || child === ground || child === sky || child === rain) continue;
+            if (child.name.startsWith("chunk-")) continue;
+            pickables.push(child);
+          }
+          for (const [key, bag] of bags) {
+            const cell = parseChunkKey(key);
+            if (Math.max(Math.abs(cell.ix - here.ix), Math.abs(cell.iy - here.iy)) <= 1) pickables.push(bag.group);
+          }
+          const hits = raycaster.intersectObjects(pickables, true);
           const hit = hits.find((h) => h.object.name !== "ground" && h.object.name !== "sky");
           pickLabel = hit ? labelFromHit(hit) || "ground geometry" : "—";
           if (edgeDirty) rebuildEdges();

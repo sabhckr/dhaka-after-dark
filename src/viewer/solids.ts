@@ -180,7 +180,19 @@ function ringSpan(outer: number[]): number {
   return Math.max(maxX - minX, maxZ - minZ);
 }
 
+const solidsMemo = new WeakMap<ChunkFile, { bucket: SolidBucket; plans: FootPlan[] }>();
+
+/** Same chunk object, same result: collision and the footbridge meshes both need it on load. */
 export function solidsFromChunk(chunk: ChunkFile): { bucket: SolidBucket; plans: FootPlan[] } {
+  let out = solidsMemo.get(chunk);
+  if (!out) {
+    out = buildSolids(chunk);
+    solidsMemo.set(chunk, out);
+  }
+  return out;
+}
+
+function buildSolids(chunk: ChunkFile): { bucket: SolidBucket; plans: FootPlan[] } {
   const walls: SegWall[] = [];
   const decks: DeckSpan[] = [];
   const roofs: RoofPlate[] = [];
@@ -237,19 +249,89 @@ function touchCells(x0: number, z0: number, x1: number, z1: number, into: Set<st
   into.add(cellOf(maxX, maxZ));
 }
 
+/** Index one chunk's solids by grid cell. Built once per chunk load, not per query. */
+function indexBucket(bucket: SolidBucket): Map<string, Cell> {
+  const cells = new Map<string, Cell>();
+  const take = (key: string): Cell => {
+    let c = cells.get(key);
+    if (!c) {
+      c = { walls: [], decks: [], roofs: [], columns: [] };
+      cells.set(key, c);
+    }
+    return c;
+  };
+  for (const w of bucket.walls) {
+    const keys = new Set<string>();
+    touchCells(w.ax, w.az, w.bx, w.bz, keys);
+    for (const k of keys) take(k).walls.push(w);
+  }
+  for (const d of bucket.decks) {
+    const keys = new Set<string>();
+    const n = d.pts.length / 2;
+    for (let i = 0; i < n - 1; i++) {
+      touchCells(d.pts[i * 2], d.pts[i * 2 + 1], d.pts[(i + 1) * 2], d.pts[(i + 1) * 2 + 1], keys);
+    }
+    if (n === 1) keys.add(cellOf(d.pts[0], d.pts[1]));
+    for (const k of keys) take(k).decks.push(d);
+  }
+  for (const roof of bucket.roofs) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    const n = roof.outer.length / 2;
+    for (let i = 0; i < n; i++) {
+      minX = Math.min(minX, roof.outer[i * 2]);
+      maxX = Math.max(maxX, roof.outer[i * 2]);
+      minZ = Math.min(minZ, roof.outer[i * 2 + 1]);
+      maxZ = Math.max(maxZ, roof.outer[i * 2 + 1]);
+    }
+    const keys = new Set<string>();
+    touchCells(minX, minZ, maxX, maxZ, keys);
+    for (const k of keys) take(k).roofs.push(roof);
+  }
+  for (const c of bucket.columns) take(cellOf(c.x, c.z)).columns.push(c);
+  return cells;
+}
+
+/**
+ * Collision grid over the loaded chunks. Each chunk is indexed once when it is
+ * set; loading or unloading one chunk touches only that chunk's cells. (It used
+ * to re-index every loaded chunk on the first query after any change, which
+ * stalled the frame after each chunk load.)
+ */
 export class SolidWorld {
   private readonly chunks = new Map<string, SolidBucket>();
-  private cells = new Map<string, Cell>();
-  private dirty = false;
+  private readonly chunkCells = new Map<string, Map<string, Cell>>();
+  private readonly cells = new Map<string, Cell[]>();
 
   setChunk(key: string, bucket: SolidBucket): void {
+    if (this.chunks.has(key)) this.deleteChunk(key);
+    const own = indexBucket(bucket);
     this.chunks.set(key, bucket);
-    this.dirty = true;
+    this.chunkCells.set(key, own);
+    for (const [cellKey, cell] of own) {
+      let list = this.cells.get(cellKey);
+      if (!list) {
+        list = [];
+        this.cells.set(cellKey, list);
+      }
+      list.push(cell);
+    }
   }
 
   deleteChunk(key: string): void {
     if (!this.chunks.delete(key)) return;
-    this.dirty = true;
+    const own = this.chunkCells.get(key);
+    this.chunkCells.delete(key);
+    if (!own) return;
+    for (const [cellKey, cell] of own) {
+      const list = this.cells.get(cellKey);
+      if (!list) continue;
+      const at = list.indexOf(cell);
+      if (at >= 0) list.splice(at, 1);
+      if (!list.length) this.cells.delete(cellKey);
+    }
   }
 
   get chunkCount(): number {
@@ -270,60 +352,11 @@ export class SolidWorld {
     return { walls, decks, roofs, columns };
   }
 
-  private rebuild(): void {
-    if (!this.dirty) return;
-    const cells = new Map<string, Cell>();
-    const take = (key: string): Cell => {
-      let c = cells.get(key);
-      if (!c) {
-        c = { walls: [], decks: [], roofs: [], columns: [] };
-        cells.set(key, c);
-      }
-      return c;
-    };
-    for (const bucket of this.chunks.values()) {
-      for (const w of bucket.walls) {
-        const keys = new Set<string>();
-        touchCells(w.ax, w.az, w.bx, w.bz, keys);
-        for (const k of keys) take(k).walls.push(w);
-      }
-      for (const d of bucket.decks) {
-        const keys = new Set<string>();
-        const n = d.pts.length / 2;
-        for (let i = 0; i < n - 1; i++) {
-          touchCells(d.pts[i * 2], d.pts[i * 2 + 1], d.pts[(i + 1) * 2], d.pts[(i + 1) * 2 + 1], keys);
-        }
-        if (n === 1) keys.add(cellOf(d.pts[0], d.pts[1]));
-        for (const k of keys) take(k).decks.push(d);
-      }
-      for (const roof of bucket.roofs) {
-        let minX = Infinity;
-        let maxX = -Infinity;
-        let minZ = Infinity;
-        let maxZ = -Infinity;
-        const n = roof.outer.length / 2;
-        for (let i = 0; i < n; i++) {
-          minX = Math.min(minX, roof.outer[i * 2]);
-          maxX = Math.max(maxX, roof.outer[i * 2]);
-          minZ = Math.min(minZ, roof.outer[i * 2 + 1]);
-          maxZ = Math.max(maxZ, roof.outer[i * 2 + 1]);
-        }
-        const keys = new Set<string>();
-        touchCells(minX, minZ, maxX, maxZ, keys);
-        for (const k of keys) take(k).roofs.push(roof);
-      }
-      for (const c of bucket.columns) take(cellOf(c.x, c.z)).columns.push(c);
-    }
-    this.cells = cells;
-    this.dirty = false;
-  }
-
   nearby(x: number, z: number): Cell {
     return this.gather(x, z, CELL);
   }
 
   private gather(x: number, z: number, pad: number): Cell {
-    this.rebuild();
     const walls: SegWall[] = [];
     const decks: DeckSpan[] = [];
     const roofs: RoofPlate[] = [];
@@ -334,23 +367,25 @@ export class SolidWorld {
     const seenC = new Set<Column>();
     for (let dx = -pad; dx <= pad; dx += CELL) {
       for (let dz = -pad; dz <= pad; dz += CELL) {
-        const cell = this.cells.get(cellOf(x + dx, z + dz));
-        if (!cell) continue;
-        for (const w of cell.walls) if (!seenW.has(w)) {
-          seenW.add(w);
-          walls.push(w);
-        }
-        for (const d of cell.decks) if (!seenD.has(d)) {
-          seenD.add(d);
-          decks.push(d);
-        }
-        for (const r of cell.roofs) if (!seenR.has(r)) {
-          seenR.add(r);
-          roofs.push(r);
-        }
-        for (const c of cell.columns) if (!seenC.has(c)) {
-          seenC.add(c);
-          columns.push(c);
+        const list = this.cells.get(cellOf(x + dx, z + dz));
+        if (!list) continue;
+        for (const cell of list) {
+          for (const w of cell.walls) if (!seenW.has(w)) {
+            seenW.add(w);
+            walls.push(w);
+          }
+          for (const d of cell.decks) if (!seenD.has(d)) {
+            seenD.add(d);
+            decks.push(d);
+          }
+          for (const r of cell.roofs) if (!seenR.has(r)) {
+            seenR.add(r);
+            roofs.push(r);
+          }
+          for (const c of cell.columns) if (!seenC.has(c)) {
+            seenC.add(c);
+            columns.push(c);
+          }
         }
       }
     }
