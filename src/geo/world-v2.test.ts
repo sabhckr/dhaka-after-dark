@@ -132,6 +132,13 @@ test("building tags copy into v2 attributes and nothing is invented", () => {
     {},
   );
   assert.equal(buildingAttrs({ building: "yes", "building:levels": "2.5" }).lv, 2.5);
+  // Found by the OSM check: an address note in the levels tag is not a level count.
+  assert.equal(buildingAttrs({ building: "office", "building:levels": "5th Floor" }).lv, undefined);
+  assert.equal(buildingAttrs({ building: "yes", "building:levels": "G+4" }).lv, undefined);
+  // Also found by the OSM check: levels written in Bangla digits.
+  assert.equal(buildingAttrs({ building: "yes", "building:levels": "৮" }).lv, 8);
+  assert.equal(buildingAttrs({ building: "yes", "building:levels": "১২" }).lv, 12);
+  assert.equal(roadAttrs({ highway: "primary", lanes: "৪" }).ln, 4);
   assert.equal(buildingAttrs({ building: "yes", "building:min_level": "3" }).mlv, 3);
   assert.equal(buildingAttrs({ building: "yes", layer: "0" }).ly, undefined);
 });

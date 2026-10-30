@@ -286,7 +286,13 @@ export function inPrefilter(lat: number, lon: number): boolean {
 
 type Tags = Record<string, string>;
 
-function intIn(raw: string | undefined, min: number, max: number): number | undefined {
+/** Bangla digits (০–৯) as ASCII. Dhaka mappers write numbers both ways, e.g. building:levels=২. */
+export function asciiDigits(raw: string | undefined): string | undefined {
+  return raw?.replace(/[\u09E6-\u09EF]/g, (d) => String(d.charCodeAt(0) - 0x09e6));
+}
+
+function intIn(rawTag: string | undefined, min: number, max: number): number | undefined {
+  const raw = asciiDigits(rawTag);
   if (raw == null || !/^\s*-?\d+\s*$/.test(raw)) return undefined;
   const v = Number.parseInt(raw, 10);
   return v >= min && v <= max ? v : undefined;
@@ -314,15 +320,23 @@ export const BUILDING_FIELDS: Record<string, string[]> = {
   nm: ["name"],
 };
 
+/** A plain count such as "5" or "2.5". "5th Floor" or "G+4" is not a level count and is skipped. */
+function levelCount(rawTag: string | undefined): number | undefined {
+  const raw = asciiDigits(rawTag);
+  if (raw == null || !/^\s*\d+(?:[.,]\d+)?\s*$/.test(raw)) return undefined;
+  const v = Number(raw.trim().replace(",", "."));
+  return v > 0 && v < 150 ? Math.round(v * 2) / 2 : undefined;
+}
+
 export function buildingAttrs(tags: Tags): BuildingAttrs {
   const a: BuildingAttrs = {};
   const t = word(tags.building);
   if (t && t !== "yes") a.t = t;
-  const lv = parseMetres(tags["building:levels"]);
-  if (lv != null && lv > 0 && lv < 150) a.lv = Math.round(lv * 2) / 2;
-  const mlv = parseMetres(tags["building:min_level"]);
-  if (mlv != null && mlv > 0 && mlv < 150) a.mlv = Math.round(mlv * 2) / 2;
-  const mh = parseMetres(tags.min_height);
+  const lv = levelCount(tags["building:levels"]);
+  if (lv) a.lv = lv;
+  const mlv = levelCount(tags["building:min_level"]);
+  if (mlv) a.mlv = mlv;
+  const mh = parseMetres(asciiDigits(tags.min_height));
   if (mh != null && mh > 0 && mh < 600) a.mh = Math.round(mh * 100) / 100;
   const mat = word(tags["building:material"]);
   if (mat) a.mat = mat;
@@ -389,7 +403,7 @@ export function roadAttrs(tags: Tags): RoadAttrs {
   if (sf) a.sf = sf;
   if (tags.lit === "yes") a.lit = 1;
   else if (tags.lit === "no") a.lit = 0;
-  const mx = parseMaxspeed(tags.maxspeed);
+  const mx = parseMaxspeed(asciiDigits(tags.maxspeed));
   if (mx) a.mx = mx;
   const nm = label(tags.name);
   if (nm) a.nm = nm;
