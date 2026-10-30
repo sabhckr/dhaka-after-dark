@@ -102,3 +102,7 @@ Details and the placement list: [docs/asset-index.md](docs/asset-index.md).
 ## Not in this phase
 
 Traffic simulation, missions, combat, animated crowds, a DEM. Figures in the Sangsad and Shahbagh yards are posed meshes, not pedestrians. There is no screen-space rain reflection and no unique photo per building. Shop boards are only as complete as the OSM name tags.
+
+## Licence
+
+Code: MIT, see [LICENSE](LICENSE). Map data in `public/world/`: ODbL 1.0, © OpenStreetMap contributors. Asset licences: [docs/signage-pack.md](docs/signage-pack.md).
