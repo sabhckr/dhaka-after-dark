@@ -164,6 +164,16 @@ With two runs each, the staged data shows no streaming cost beyond run-to-run no
 
 ## Integration and rollback
 
+**Integrated on 2026-10-30.** The user approved it, and the final staging copy (the generator-owned files) was copied into `public/world`. After the copy:
+
+- every generator file hashes equal to the validated final staging;
+- `signs/` and `assets/` hash equal to the shipped files;
+- the validator gives the same figures against the git copy of the shipped data;
+- 156 of 156 game tests pass, typecheck passes and the build exits 0;
+- in the game, the HUD shows `errors none` at the Sangsad spawn and at Shahbagh (14 cars, 3 holding at a signal);
+- one streaming run gave 55.7 FPS average, p99 33.3 ms and 3.42 s in frames over 50 ms, with no console errors.
+
+
 Integration replaces only generator-owned files and keeps `signs/` and `assets/`:
 
 ```bash

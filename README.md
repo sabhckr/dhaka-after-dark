@@ -53,16 +53,16 @@ Outputs:
 - `public/world/overview.json` — major roads, water, boundary for the minimap
 - `public/world/landmarks.json`
 
-Latest generation (2026-10-29, Geofabrik Bangladesh extract dated 2026-10-28):
+Latest generation (2026-10-30, Geofabrik Bangladesh extract dated 2026-10-28):
 
 - Boundary area **302.43 km²** (relation 13663697)
 - **1,298** chunks with features, **1,333** chunks touch the boundary, **37** empty inside it
 - **495,002** building footprints — **630 measured** heights, **494,372 estimated** (OSM almost never tags `building:height` here)
-- **28,889** roads, **56,057** graph edges, **56,750** graph nodes
+- **28,889** roads, **73,080** graph edges, **58,673** graph nodes. The graph has **174** connected parts and the largest holds **98.6 %** of its nodes; the rest are mostly footpaths and footbridge stairs that OSM does not join to a road ([docs/world-data.md](docs/world-data.md))
 - **1,462** water polygons, **1,779** canals/drains, **1,130** parks, **194** rail ways, **21** bridge decks
 - **7,992** mapped trees, **7,223** approximate park trees
 - **1,986** named landmarks
-- Runtime chunks **86.8 MB**
+- Runtime chunks **90.5 MB**
 - Densest 500 m chunk: **4,480** buildings (median 270, 90th percentile 940)
 
 ## Run

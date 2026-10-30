@@ -30,14 +30,14 @@
     "treesApprox": 7223,
     "landmarks": 1986,
     "skipped": 0,
-    "graphNodes": 56750,
-    "graphEdges": 56057,
+    "graphNodes": 58673,
+    "graphEdges": 73080,
     "chunks": 1298,
     "chunksInsideBoundary": 1333,
     "emptyChunksInsideBoundary": 37,
     "mappedTrees": 7992,
     "approxTrees": 7223,
-    "outputBytes": 86789650
+    "outputBytes": 90501595
   },
   "chunkBuildingHistogram": {
     "min": 0,
