@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { ChunkCoord } from "../geo/chunks.ts";
+import { normalizeChunk } from "../geo/compat.ts";
 import type { ShopRec } from "../geo/shops.ts";
 import { ChunkScheduler, releaseChunkResources, type ReleaseBag } from "../geo/streaming.ts";
 import type { ChunkFile } from "../geo/types.ts";
@@ -77,7 +78,7 @@ async function fetchChunk(
   }
   const problems = stages.time("validate", () => validateChunk(data));
   if (problems.length) throw new Error(`Chunk ${ix}_${iy}: ${problems[0]}`);
-  return data as ChunkFile;
+  return normalizeChunk(data as ChunkFile);
 }
 
 /**

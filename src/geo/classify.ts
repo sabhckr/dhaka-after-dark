@@ -1,3 +1,5 @@
+import type { BuildingAttrs, PointKind, RoadAttrs, Sidewalk } from "./types.ts";
+
 /** Widths are estimates unless the way carries a numeric width tag. Metres. */
 export const HIGHWAY_WIDTH_M: Record<string, number> = {
   motorway: 16,
@@ -278,4 +280,180 @@ export function inPrefilter(lat: number, lon: number): boolean {
     lon >= DHAKA_PREFILTER.minLon &&
     lon <= DHAKA_PREFILTER.maxLon
   );
+}
+
+// ---------- Schema v2 attributes: copied from OSM tags, never inferred ----------
+
+type Tags = Record<string, string>;
+
+function intIn(raw: string | undefined, min: number, max: number): number | undefined {
+  if (raw == null || !/^\s*-?\d+\s*$/.test(raw)) return undefined;
+  const v = Number.parseInt(raw, 10);
+  return v >= min && v <= max ? v : undefined;
+}
+
+function word(raw: string | undefined, max = 40): string | undefined {
+  const v = raw?.trim().toLowerCase();
+  return v && v.length <= max ? v : undefined;
+}
+
+function label(raw: string | undefined, max = 80): string | undefined {
+  const v = raw?.trim();
+  return v && v.length <= max ? v : undefined;
+}
+
+/** Fields a v2 building may carry, with the OSM tag each one copies. */
+export const BUILDING_FIELDS: Record<string, string[]> = {
+  t: ["building"],
+  lv: ["building:levels"],
+  mlv: ["building:min_level"],
+  mh: ["min_height"],
+  mat: ["building:material"],
+  roof: ["roof:shape"],
+  ly: ["layer"],
+  nm: ["name"],
+};
+
+export function buildingAttrs(tags: Tags): BuildingAttrs {
+  const a: BuildingAttrs = {};
+  const t = word(tags.building);
+  if (t && t !== "yes") a.t = t;
+  const lv = parseMetres(tags["building:levels"]);
+  if (lv != null && lv > 0 && lv < 150) a.lv = Math.round(lv * 2) / 2;
+  const mlv = parseMetres(tags["building:min_level"]);
+  if (mlv != null && mlv > 0 && mlv < 150) a.mlv = Math.round(mlv * 2) / 2;
+  const mh = parseMetres(tags.min_height);
+  if (mh != null && mh > 0 && mh < 600) a.mh = Math.round(mh * 100) / 100;
+  const mat = word(tags["building:material"]);
+  if (mat) a.mat = mat;
+  const roof = word(tags["roof:shape"]);
+  if (roof) a.roof = roof;
+  const ly = intIn(tags.layer, -5, 10);
+  if (ly) a.ly = ly;
+  const nm = label(tags.name);
+  if (nm) a.nm = nm;
+  return a;
+}
+
+/** Fields a v2 road may carry, with the OSM tags each one copies. */
+export const ROAD_FIELDS: Record<string, string[]> = {
+  ln: ["lanes"],
+  sw: ["sidewalk", "sidewalk:both", "sidewalk:left", "sidewalk:right"],
+  sf: ["surface"],
+  lit: ["lit"],
+  mx: ["maxspeed"],
+  nm: ["name"],
+  nme: ["name:en"],
+  ly: ["layer"],
+  tn: ["tunnel"],
+};
+
+const SIDE_YES = new Set(["yes", "both"]);
+
+/** sidewalk=* and its :both/:left/:right forms, reduced to one value. Untagged stays undefined. */
+export function parseSidewalk(tags: Tags): Sidewalk | undefined {
+  const main = word(tags.sidewalk);
+  if (main === "both" || main === "left" || main === "right" || main === "separate") return main;
+  if (main === "no" || main === "none") return "no";
+  if (main === "yes") return "both";
+  const both = word(tags["sidewalk:both"]);
+  if (both === "separate") return "separate";
+  if (both && SIDE_YES.has(both)) return "both";
+  if (both === "no") return "no";
+  const l = word(tags["sidewalk:left"]);
+  const r = word(tags["sidewalk:right"]);
+  if (l === "separate" || r === "separate") return "separate";
+  const ly = l != null && SIDE_YES.has(l);
+  const ry = r != null && SIDE_YES.has(r);
+  if (ly && ry) return "both";
+  if (ly) return "left";
+  if (ry) return "right";
+  if (l === "no" && r === "no") return "no";
+  return undefined;
+}
+
+export function parseMaxspeed(raw: string | undefined): number | undefined {
+  const m = raw?.match(/^\s*(\d+(?:\.\d+)?)\s*(mph)?\s*$/i);
+  if (!m) return undefined;
+  const v = Number(m[1]) * (m[2] ? 1.609344 : 1);
+  return v > 0 && v <= 150 ? Math.round(v) : undefined;
+}
+
+export function roadAttrs(tags: Tags): RoadAttrs {
+  const a: RoadAttrs = {};
+  const ln = intIn(tags.lanes, 1, 12);
+  if (ln) a.ln = ln;
+  const sw = parseSidewalk(tags);
+  if (sw) a.sw = sw;
+  const sf = word(tags.surface);
+  if (sf) a.sf = sf;
+  if (tags.lit === "yes") a.lit = 1;
+  else if (tags.lit === "no") a.lit = 0;
+  const mx = parseMaxspeed(tags.maxspeed);
+  if (mx) a.mx = mx;
+  const nm = label(tags.name);
+  if (nm) a.nm = nm;
+  const nme = label(tags["name:en"]);
+  if (nme && nme !== nm) a.nme = nme;
+  const ly = intIn(tags.layer, -5, 10);
+  if (ly) a.ly = ly;
+  if (tags.tunnel === "yes" || tags.tunnel === "culvert" || tags.tunnel === "building_passage") a.tn = 1;
+  return a;
+}
+
+/** One kind per node, checked in this order. The tag each kind reads is in POINT_TAGS. */
+export function pointKind(tags: Tags): PointKind | null {
+  if (tags.highway === "traffic_signals") return "signal";
+  if (tags.highway === "crossing" || tags.footway === "crossing") return "crossing";
+  if (tags.highway === "bus_stop") return "bus_stop";
+  if (tags.public_transport === "platform" && (tags.bus === "yes" || tags.highway === "platform")) return "platform";
+  if (tags.highway === "street_lamp") return "lamp";
+  if (tags.power === "tower") return "tower";
+  if (tags.barrier === "gate") return "gate";
+  return null;
+}
+
+export const POINT_TAGS: Record<string, string[]> = {
+  signal: ["highway=traffic_signals"],
+  crossing: ["highway=crossing", "footway=crossing", "crossing"],
+  bus_stop: ["highway=bus_stop", "name"],
+  platform: ["public_transport=platform + bus=yes", "name"],
+  lamp: ["highway=street_lamp"],
+  tower: ["power=tower"],
+  gate: ["barrier=gate"],
+};
+
+const LANDUSE_SKIP = new Set(["reservoir", "basin", "recreation_ground", "village_green", "forest"]);
+const LEISURE_PARK = new Set(["park", "garden", "playground", "pitch", "recreation_ground"]);
+
+/**
+ * Landuse value of an area v1 does not already draw as water or park.
+ * Non-park leisure areas come back as "leisure:<value>".
+ */
+export function landuseType(tags: Tags): string | null {
+  if (isWaterArea(tags) || isPark(tags) || isBuilding(tags)) return null;
+  const lu = word(tags.landuse);
+  if (lu && !LANDUSE_SKIP.has(lu)) return lu;
+  const le = word(tags.leisure);
+  if (le && !LEISURE_PARK.has(le)) return `leisure:${le}`;
+  return null;
+}
+
+const BARRIER_LINES = new Set(["wall", "fence", "retaining_wall", "city_wall", "hedge"]);
+
+export function barrierType(tags: Tags): string | null {
+  const b = word(tags.barrier);
+  return b && BARRIER_LINES.has(b) ? b : null;
+}
+
+export function powerLine(tags: Tags): { t: string; kv?: number } | null {
+  if (tags.power !== "line" && tags.power !== "minor_line") return null;
+  const volts = Number.parseInt((tags.voltage || "").split(";")[0], 10);
+  return Number.isFinite(volts) && volts > 0 ? { t: tags.power, kv: volts / 1000 } : { t: tags.power };
+}
+
+const PLACE_KINDS = new Set(["city", "borough", "suburb", "quarter", "neighbourhood", "town", "village", "hamlet", "locality"]);
+
+export function placeKind(tags: Tags): string | null {
+  return tags.name && tags.place && PLACE_KINDS.has(tags.place) ? tags.place : null;
 }
