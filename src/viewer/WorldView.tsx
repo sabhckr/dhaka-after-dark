@@ -99,6 +99,8 @@ declare global {
       halt: () => void;
       resume: () => void;
     };
+    /** Golden-view captures: hide moving actors and stop animated surfaces so two runs compare pixel for pixel. */
+    __golden?: { freeze: (on: boolean) => void };
   }
 }
 
@@ -328,6 +330,7 @@ export function WorldView() {
       let lastSpeed = 0;
       let lastBlocked = false;
       let lightning = 0;
+      let frozen = false;
       let nextBolt = 3.5;
       let frames = 0;
       let fpsAcc = 0;
@@ -657,6 +660,15 @@ export function WorldView() {
         snatch: () => life.snatch(),
         setMinutes: (minutes) => life.setMinutes(minutes),
       };
+      window.__golden = {
+        freeze: (on) => {
+          frozen = on;
+          for (const name of ["traffic", "npcs"]) {
+            const obj = scene.getObjectByName(name);
+            if (obj) obj.visible = !on;
+          }
+        },
+      };
       window.__perf = {
         reset: () => probe.reset(),
         summary: () => probe.summary(),
@@ -778,13 +790,13 @@ export function WorldView() {
         } else if (lightning < 0.02) lightning = 0;
         lightning = Math.max(0, lightning - dt * 5.5);
         const look = composeWeather(blended, weatherRef.current, lightning);
-        lib.tick(dt, lightning);
+        lib.tick(frozen ? 0 : dt, lightning);
         lib.applyLook(look, scene, renderer, lights, settled);
         const high = qualityRef.current === "high";
         const rainMat = rain.material as THREE.PointsMaterial;
         rainMat.opacity = 0.48 * look.rain;
         const underRoof = solids.covered(fly.x, fly.y, fly.z);
-        rain.visible = look.rain > 0.04 && high && !reduceMotion && !underRoof;
+        rain.visible = look.rain > 0.04 && high && !reduceMotion && !underRoof && !frozen;
         if (rain.visible) {
           const attr = rainGeo.getAttribute("position") as THREE.BufferAttribute;
           for (let i = 0; i < rainN; i++) {
