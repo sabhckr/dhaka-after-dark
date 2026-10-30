@@ -10,6 +10,8 @@ import { moveSolid, type SolidWorld } from "../viewer/solids.ts";
 import type { ChunkFile } from "../geo/types.ts";
 import { approachAngle, hashStr, type DayPart, type Npc, type PlayerSample, type RoleId } from "./types.ts";
 
+/** Per-frame time for building the replacement pedestrian graph after an unload. */
+const NAV_STEP_MS = 3;
 const MOVING = new Set(["WALKING", "RUNNING", "FLEEING", "CROSSING_ROAD", "INVESTIGATING", "RETURNING_TO_ROUTINE"]);
 
 export type PopulationOptions = {
@@ -111,9 +113,18 @@ export class Population {
 
   onUnload(key: string): void {
     this.nav.deleteChunk(key);
+    this.dropUnanchored(key);
+  }
+
+  /**
+   * Removes walkers that belonged to an unloaded chunk. Streamed walkers are
+   * checked against the live graph, which keeps an unloaded chunk's nodes until
+   * its replacement is swapped in, so the tick checks them again after a swap.
+   */
+  private dropUnanchored(key: string | null): void {
     for (let i = this.npcs.length - 1; i >= 0; i--) {
       const npc = this.npcs[i];
-      const gone = npc.chunk === key || (npc.chunk === "stream" && !this.nav.hasAnchor(npc.anchorKey));
+      const gone = (key !== null && npc.chunk === key) || (npc.chunk === "stream" && !this.nav.hasAnchor(npc.anchorKey));
       if (!gone) continue;
       npc.alive = false;
       npc.lastTransition = "chunk-unload";
@@ -145,6 +156,7 @@ export class Population {
     const step = Math.min(Math.max(dt, 0), 0.1);
     if (step <= 0) return;
     const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (this.nav.step(NAV_STEP_MS)) this.dropUnanchored(null);
     this.clock.advance(step);
     this.bus.advance(step);
     this.noteDanger(step);

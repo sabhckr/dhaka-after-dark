@@ -13,12 +13,17 @@ export async function launch({ reducedMotion = "no-preference" } = {}) {
     headless: true,
     args: ["--enable-gpu", "--ignore-gpu-blocklist", "--enable-precise-memory-info"],
   });
-  const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1, reducedMotion });
+  const page = await browser.newPage({
+    viewport: { width: 1600, height: 900 },
+    deviceScaleFactor: 1,
+    reducedMotion,
+  });
   const errors = [];
   page.on("pageerror", (err) => errors.push(String(err)));
   page.on("console", (msg) => {
     // Failed loads are reported with their URL by the response listener below.
-    if (msg.type() === "error" && !/^Failed to load resource/.test(msg.text())) errors.push(msg.text());
+    if (msg.type() === "error" && !/^Failed to load resource/.test(msg.text()))
+      errors.push(msg.text());
   });
   page.on("response", (res) => {
     if (res.status() >= 400) errors.push(`${res.status()} ${res.url()}`);
@@ -29,16 +34,26 @@ export async function launch({ reducedMotion = "no-preference" } = {}) {
 /** Opens the world at High quality and waits for the first ring to finish loading. */
 export async function boot(page, url) {
   const t0 = Date.now();
-  await page.goto(`${url.replace(/\/$/, "")}/?quality=high`, { waitUntil: "domcontentloaded", timeout: 90000 });
-  await page.waitForFunction(() => window.__perf && window.__teleport && window.__setLook && window.__controlsTest, null, { timeout: 120000 });
+  await page.goto(`${url.replace(/\/$/, "")}/?quality=high`, {
+    waitUntil: "domcontentloaded",
+    timeout: 90000,
+  });
+  await page.waitForFunction(
+    () => window.__perf && window.__teleport && window.__setLook && window.__controlsTest,
+    null,
+    { timeout: 120000 },
+  );
   await loaded(page, /loaded [1-9]/);
   return Date.now() - t0;
 }
 
-/** Waits until the HUD reports no chunk fetches in flight. */
+/** Waits until the HUD reports no chunk fetches in flight and, in builds with the queue, nothing waits to be joined. */
 export function loaded(page, also) {
   return page.waitForFunction(
-    (src) => /loading 0/.test(document.body.innerText) && (!src || new RegExp(src).test(document.body.innerText)),
+    (src) =>
+      /loading 0/.test(document.body.innerText) &&
+      (!window.__perf?.queued || window.__perf.queued() === 0) &&
+      (!src || new RegExp(src).test(document.body.innerText)),
     also ? also.source : null,
     { timeout: 120000 },
   );
@@ -46,7 +61,9 @@ export function loaded(page, also) {
 
 export function panel(page, show) {
   return page.evaluate((show) => {
-    const btn = [...document.querySelectorAll("button")].find((b) => /^(Hide|Show) panel$/.test(b.textContent.trim()));
+    const btn = [...document.querySelectorAll("button")].find((b) =>
+      /^(Hide|Show) panel$/.test(b.textContent.trim()),
+    );
     if (btn && /Hide/.test(btn.textContent) !== show) btn.click();
   }, show);
 }

@@ -208,3 +208,43 @@ export function censusScene(scene: THREE.Object3D): { rows: CensusRow[]; meshes:
     triangles: rows.reduce((s, r) => s + r.triangles, 0),
   };
 }
+
+export type StageRow = { n: number; totalMs: number; maxMs: number };
+
+/**
+ * Wall time per named stage of chunk streaming (parse, collision, mesh build,
+ * ...). Reports count, total and the single worst call, so a stage that
+ * makes long frames is visible even when its average is small.
+ */
+export function createStageTimer(now: () => number = () => performance.now()) {
+  const rows = new Map<string, StageRow>();
+  const note = (stage: string, ms: number) => {
+    let row = rows.get(stage);
+    if (!row) {
+      row = { n: 0, totalMs: 0, maxMs: 0 };
+      rows.set(stage, row);
+    }
+    row.n++;
+    row.totalMs += ms;
+    if (ms > row.maxMs) row.maxMs = ms;
+  };
+  return {
+    note,
+    time<T>(stage: string, fn: () => T): T {
+      const t0 = now();
+      try {
+        return fn();
+      } finally {
+        note(stage, now() - t0);
+      }
+    },
+    reset() {
+      rows.clear();
+    },
+    report(): Record<string, StageRow> {
+      const out: Record<string, StageRow> = {};
+      for (const [stage, row] of rows) out[stage] = { n: row.n, totalMs: +row.totalMs.toFixed(1), maxMs: +row.maxMs.toFixed(1) };
+      return out;
+    },
+  };
+}

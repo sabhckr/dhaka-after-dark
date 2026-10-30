@@ -55,13 +55,28 @@ for (const view of VIEWS) {
       const census = window.__perf.census();
       const text = document.body.innerText;
       const num = (re) => Number((text.match(re) || [])[1] || NaN);
-      return { draws: num(/draws (\d+)/), sceneTriangles: census.triangles, meshes: census.meshes, chunks: num(/loaded (\d+)/) };
+      return {
+        draws: num(/draws (\d+)/),
+        sceneTriangles: census.triangles,
+        meshes: census.meshes,
+        chunks: num(/loaded (\d+)/),
+      };
     });
     rows.push({ name, view: view.id, condition: c.id, camera: view, ...stats });
-    console.log(name, `draws ${stats.draws} scene tris ${stats.sceneTriangles} chunks ${stats.chunks}`);
+    console.log(
+      name,
+      `draws ${stats.draws} scene tris ${stats.sceneTriangles} chunks ${stats.chunks}`,
+    );
   }
 }
 const gpu = await page.evaluate(() => window.__perf.renderer());
-writeFileSync(join(out, "capture.json"), JSON.stringify({ url, when: new Date().toISOString(), gpu, bootMs, freezeHook: hasHook, errors, rows }, null, 1));
+writeFileSync(
+  join(out, "capture.json"),
+  JSON.stringify(
+    { url, when: new Date().toISOString(), gpu, bootMs, freezeHook: hasHook, errors, rows },
+    null,
+    1,
+  ),
+);
 console.log(`${rows.length} captures, ${errors.length} console errors, freeze hook ${hasHook}`);
 await browser.close();

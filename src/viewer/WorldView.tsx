@@ -25,7 +25,8 @@ import { banglaHasInk } from "@/viewer/posters";
 import { mountIntegratedAssets } from "@/assets/street";
 import { createCityLife, type CityLife } from "@/npc/runtime";
 import { createCityTraffic } from "@/traffic/view";
-import { censusScene, createFrameProbe } from "@/viewer/perf";
+import { IntegrationQueue } from "@/engine/integrate";
+import { censusScene, createFrameProbe, createStageTimer } from "@/viewer/perf";
 import { farPropsHidden } from "@/viewer/detail";
 
 type Overview = {
@@ -95,6 +96,10 @@ declare global {
       setGroupVisible: (name: string, visible: boolean) => boolean;
       renderer: () => string;
       memory: () => { jsHeapUsed?: number; jsHeapTotal?: number } | null;
+      /** Chunk streaming cost by stage since the last reset. */
+      loads: () => ReturnType<typeof stages.report>;
+      /** Fetched chunks still waiting to be joined into the scene. */
+      queued: () => number;
       pause: (value: boolean) => void;
       halt: () => void;
       resume: () => void;
@@ -123,17 +128,24 @@ function makeRenderer(mount: HTMLDivElement) {
   return renderer;
 }
 
+/** Per-frame time for joining streamed chunks into the scene, collision and graphs. */
+const INTEGRATE_MS = 6;
+
+/** Chunk streaming cost by stage, read by window.__perf.loads(). */
+const stages = createStageTimer();
+
 async function fetchChunk(ix: number, iy: number): Promise<ChunkFile | null> {
   const res = await fetch(`/world/chunks/c_${ix}_${iy}.json`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Chunk ${ix}_${iy} failed (${res.status})`);
   let data: unknown;
+  const text = await res.text();
   try {
-    data = await res.json();
+    data = stages.time("parse", () => JSON.parse(text));
   } catch {
     throw new Error(`Chunk ${ix}_${iy} is corrupt JSON`);
   }
-  const problems = validateChunk(data);
+  const problems = stages.time("validate", () => validateChunk(data));
   if (problems.length) throw new Error(`Chunk ${ix}_${iy}: ${problems[0]}`);
   return data as ChunkFile;
 }
@@ -439,6 +451,9 @@ export function WorldView() {
       // generation is thrown away, so an unload + reload during the signs fetch
       // cannot leave two copies of one chunk in the scene.
       const chunkGen = new Map<string, number>();
+      // Chunk work waits here and runs a few milliseconds per frame (see IntegrationQueue).
+      const integration = new IntegrationQueue();
+      const live = (key: string, gen: number) => !dead && scheduler.loaded.has(key) && chunkGen.get(key) === gen;
       const bumpGen = (key: string) => {
         const next = (chunkGen.get(key) ?? 0) + 1;
         chunkGen.set(key, next);
@@ -453,13 +468,16 @@ export function WorldView() {
           const gen = bumpGen(key);
           if (!data) return;
           const chunk = data as ChunkFile;
-          try {
-            solids.setChunk(key, solidsFromChunk(chunk).bucket);
-            life.onChunk(key, chunk);
-            traffic.onChunk(key, chunk);
-          } catch (err) {
-            errors.push(`${key}: ${err instanceof Error ? err.message : "collision"}`);
-          }
+          integration.push(() => {
+            if (!live(key, gen)) return;
+            try {
+              stages.time("collision", () => solids.setChunk(key, solidsFromChunk(chunk).bucket));
+              stages.time("pedestrian-graph", () => life.onChunk(key, chunk));
+              stages.time("traffic", () => traffic.onChunk(key, chunk));
+            } catch (err) {
+              errors.push(`${key}: ${err instanceof Error ? err.message : "collision"}`);
+            }
+          });
           void (async () => {
             let shops: ShopRec[] = [];
             const keys = await knownSigns();
@@ -474,52 +492,58 @@ export function WorldView() {
                 /* optional sidecar */
               }
             }
-            if (dead || !scheduler.loaded.has(key) || chunkGen.get(key) !== gen) return;
-            let built: ReturnType<typeof buildChunkObjects>;
-            try {
-              const dist = Math.max(Math.abs(ix - scheduler.focus.ix), Math.abs(iy - scheduler.focus.iy));
-              const lod = selectBuildingLod(dist, qualityRef.current);
-              built = buildChunkObjects(chunk, lib.surfaces, lod);
-              const dress = buildDressing(chunk, shops, lib, qualityRef.current);
-              built.group.add(dress.group);
-              built.geometries.push(...dress.geometries);
-              built.instanced.push(...dress.instanced);
-              blocks.absorb(key, ix, iy, built.group, {
-                trees: !treesHidden(dist, qualityRef.current),
-                dressing: !farPropsHidden(dist),
-                rails: true,
+            if (!live(key, gen)) return;
+            integration.push(() => {
+              if (!live(key, gen)) return;
+              let built: ReturnType<typeof buildChunkObjects>;
+              try {
+                const dist = Math.max(Math.abs(ix - scheduler.focus.ix), Math.abs(iy - scheduler.focus.iy));
+                const lod = selectBuildingLod(dist, qualityRef.current);
+                built = stages.time("meshes", () => buildChunkObjects(chunk, lib.surfaces, lod));
+                const dress = stages.time("dressing", () => buildDressing(chunk, shops, lib, qualityRef.current));
+                built.group.add(dress.group);
+                built.geometries.push(...dress.geometries);
+                built.instanced.push(...dress.instanced);
+                const group = built.group;
+                stages.time("batch-absorb", () =>
+                  blocks.absorb(key, ix, iy, group, {
+                    trees: !treesHidden(dist, qualityRef.current),
+                    dressing: !farPropsHidden(dist),
+                    rails: true,
+                  }),
+                );
+                built.instanced = built.instanced.filter((mesh) => (mesh as THREE.Object3D).parent != null);
+                built.group.userData.chunk = chunk;
+                built.group.userData.shops = shops;
+                built.group.userData.dress = dress;
+                built.group.userData.dressQuality = qualityRef.current;
+              } catch (err) {
+                errors.push(`${key}: ${err instanceof Error ? err.message : "mesh"}`);
+                if (errors.length > 6) errors.shift();
+                return;
+              }
+              if (dead || !scheduler.loaded.has(key) || chunkGen.get(key) !== gen) {
+                blocks.drop(key);
+                releaseChunkResources(built);
+                return;
+              }
+              scene.add(built.group);
+              bags.set(key, {
+                ...built,
+                counts: {
+                  roads: chunk.roads.length,
+                  buildings: chunk.buildings.length,
+                  water: chunk.water.length + chunk.canals.length,
+                  parks: chunk.parks.length,
+                  trees: chunk.trees.length,
+                },
               });
-              built.instanced = built.instanced.filter((mesh) => (mesh as THREE.Object3D).parent != null);
-              built.group.userData.chunk = chunk;
-              built.group.userData.shops = shops;
-              built.group.userData.dress = dress;
-              built.group.userData.dressQuality = qualityRef.current;
-            } catch (err) {
-              errors.push(`${key}: ${err instanceof Error ? err.message : "mesh"}`);
-              if (errors.length > 6) errors.shift();
-              return;
-            }
-            if (dead || !scheduler.loaded.has(key) || chunkGen.get(key) !== gen) {
-              blocks.drop(key);
-              releaseChunkResources(built);
-              return;
-            }
-            scene.add(built.group);
-            bags.set(key, {
-              ...built,
-              counts: {
-                roads: chunk.roads.length,
-                buildings: chunk.buildings.length,
-                water: chunk.water.length + chunk.canals.length,
-                parks: chunk.parks.length,
-                trees: chunk.trees.length,
-              },
+              stages.time("props", () => paintProps(scheduler.focus.ix, scheduler.focus.iy));
+              edgeDirty = true;
             });
-            paintProps(scheduler.focus.ix, scheduler.focus.iy);
-            edgeDirty = true;
           })();
         },
-        onUnload: (key) => {
+        onUnload: (key) => stages.time("unload", () => {
           bumpGen(key);
           life.onUnload(key);
           traffic.onUnload(key);
@@ -531,7 +555,7 @@ export function WorldView() {
           releaseChunkResources(bag);
           bags.delete(key);
           edgeDirty = true;
-        },
+        }),
         onError: (key, err) => {
           errors.push(`${key}: ${err.message}`);
           if (errors.length > 6) errors.shift();
@@ -670,7 +694,12 @@ export function WorldView() {
         },
       };
       window.__perf = {
-        reset: () => probe.reset(),
+        reset: () => {
+          probe.reset();
+          stages.reset();
+        },
+        loads: () => stages.report(),
+        queued: () => integration.size,
         summary: () => probe.summary(),
         census: () => censusScene(scene),
         batches: () => blocks.stats(),
@@ -825,9 +854,10 @@ export function WorldView() {
           if (next === prev) continue;
           const chunk = bag.group.userData.chunk as ChunkFile | undefined;
           if (!chunk) continue;
-          retileBuildings(bag, chunk, lib.surfaces, next);
+          stages.time("lod-retile", () => retileBuildings(bag, chunk, lib.surfaces, next));
           retiled = true;
         }
+        integration.run(INTEGRATE_MS, (err) => errors.push(`integrate: ${err instanceof Error ? err.message : String(err)}`));
         const renderT0 = performance.now();
         renderer.render(scene, camera);
         probe.noteRender(performance.now() - renderT0);
@@ -856,7 +886,7 @@ export function WorldView() {
           const hits = raycaster.intersectObjects(pickables, true);
           const hit = hits.find((h) => h.object.name !== "ground" && h.object.name !== "sky");
           pickLabel = hit ? labelFromHit(hit) || "ground geometry" : "—";
-          if (edgeDirty) rebuildEdges();
+          if (edgeDirty) stages.time("road-index", rebuildEdges);
         }
 
         const geo = worldToLonLat(fly.x, fly.z);
@@ -924,6 +954,7 @@ export function WorldView() {
       stop = () => {
         renderer.setAnimationLoop(null);
         scheduler.dispose();
+        integration.clear();
         window.removeEventListener("keydown", onKey);
         window.removeEventListener("keyup", onKey);
         window.removeEventListener("blur", onBlur);
