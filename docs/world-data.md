@@ -70,7 +70,9 @@ Produced by `python3 -I scripts/geo/validate-world.py public/world <staged> <rep
 | Node id with two positions across chunks | 0 | 0 | 0 | |
 | Non-finite or null coordinates | 0 | 0 | 0 | |
 | Bridge edges with both ends in the largest component | 1,597 of 1,970 | 2,124 of 2,294 | +527 | Expected improvement |
-| Graph a car can drive (edges of 8 m or more), largest share | 66.0 % | 92.6 % | +26.6 pts | Expected improvement |
+| Vehicle network: largest component, share of its nodes | 73.3 % (4,921 components) | 99.6 % (58 components) | +26.3 pts | Expected improvement |
+| Network the traffic sim loads: largest component, share of its nodes | 64.4 % (5,668 components) | 90.8 % (905 components) | +26.4 pts | Expected improvement. The gap to 99.6 % is the sim's 8 m filter, a traffic limit (see below) |
+| Drive-class edges shorter than 8 m, which the sim drops | 2,299 | 4,499 | +2,200 | Expected: roads now split at real junctions |
 | Road pieces | 40,316 | 40,316 | 0 | Same pieces, same attributes |
 | Road vertices | 172,696 | 187,071 | +14,375 | Expected: pinned junction vertices |
 | Buildings | 519,573 | 519,573 | 0 | Identical in every chunk |
@@ -79,6 +81,14 @@ Produced by `python3 -I scripts/geo/validate-world.py public/world <staged> <rep
 
 Feature counts are pieces after chunk clipping. The manifest counts whole features (28,889 roads, 495,002 buildings).
 
+How the three connectivity shares are computed (each is the largest connected component's node count divided by a denominator):
+
+- **Largest component, share of nodes:** every graph edge of every class and length. The denominator is all 58,673 graph nodes.
+- **Vehicle network:** only edges whose class is in the sim's 10 drive classes (`primary`, `secondary` and `tertiary` with their links, `residential`, `unclassified`, `service`, `living_street`) plus `trunk`, `motorway` and their links. The edges may be any length. The denominator is the nodes those edges touch.
+- **Network the traffic sim loads:** exactly what `TrafficSim.setChunk` keeps, meaning the 10 drive classes and edges of 8 m or more. The denominator is the nodes those edges touch.
+
+An earlier version of this table gave 66.0 % → 92.6 % as "graph a car can drive". That figure counted every class, footways included, with all graph nodes as the denominator. It did not describe a vehicle network and has been replaced by the two rows above.
+
 ### Every difference, explained
 
 - **Road geometry.** 29,996 road pieces are identical. 10,320 changed, all by keeping vertices that two or more roads share. Measured over whole ways across every chunk they touch, 7,410 changed ways moved by less than 0.5 m and one moved further: way 1461813244, a path that runs 13.5 m past its last junction and turns back. The old run dropped that junction vertex; it is kept now. Per piece, 53 pieces moved 1 m or more. Every vertex behind those moves is either a chunk-border cut point that slid along the border because the road meets it at a shallow angle (26 old, 26 new) or a kept junction (2). None is unexplained. No road attribute (class, width, height, bridge flag, oneway) changed.
@@ -86,7 +96,11 @@ Feature counts are pieces after chunk clipping. The manifest counts whole featur
 - **`overview.json`.** Only `roads` changed (the simplified major-road map layer), for the same reason. `boundary` is identical, so `signs/` stays valid.
 - **`coverage.json`.** Only `counts` changed: graph nodes, graph edges, bytes.
 - **Remaining 30 dead ends within 5 cm of a road.** OSM does not give these a shared node, so they are not joined. They are unverified: some may be mapping errors, some may be real (a path that stops at a wall). Proximity is not used as evidence of a connection.
-- **Remaining 174 components.** Near Farmgate, Science Lab, New Market and Shahjalal Terminal 3, every edge outside the largest component is `steps`, `footway` or `pedestrian`: footbridge stairs and footpath networks that OSM does not join to the road. Every vehicle road at those points is in the largest component.
+- **Remaining 174 components.** Besides the largest component, 173 remain. 134 have no vehicle-class edge: they are footpaths, steps and footbridge stairs that OSM does not join to a road. The other 39 contain vehicle roads, and each one was checked against the raw PBF for every other OSM way that shares a node with it:
+  - 31 lie inside the city. None shares a node with any OSM road: 22 share no node with any way, 8 share nodes only with walls, buildings or untagged ways, and 1 is at least 50 m from the network.
+  - 8 touch the city boundary. Five of them meet another OSM road, but only outside the boundary. Two of those shared nodes were located: node 6054443016 is 60.6 m outside the boundary, and way 359364232 runs into the city and back out between two boundary crossings. The connecting ways of the other three are not in the chunk data at all.
+
+  No vehicle connection that OSM has was lost by the generator. The closest unconnected pair, ways 1572358733 and others at about (2177, −19399), is 0.08 m from the network with two separate OSM nodes. That is a mapping error to fix in OSM itself.
 
 ### Generator changes behind the difference
 
@@ -200,6 +214,11 @@ Afterwards, run `python3 -I scripts/geo/validate-world.py <old> public/world <re
 ## Limits that remain
 
 - Elevation is not modelled. Bridge and flyover heights come from tags or class defaults, not from a DEM or survey.
-- The traffic sim skips edges shorter than 8 m, and 5,172 graph edges are that short, mostly short links between close junctions. Cars still vanish at dead ends. Trunk roads are not in the traffic class list.
+- The traffic sim skips edges shorter than 8 m.
+  - 5,172 graph edges are that short. 4,499 of them are in the sim's drive classes, and 1,105 of those are on primary, secondary or tertiary roads or their links.
+  - The filter leaves 4,069 nodes of the drive network outside the sim's largest component. The nearest major-road node to Kawran Bazar and to Shahbagh is among them.
+  - This is a traffic-system limit to fix in the sim, not in the data.
+- Cars still vanish at dead ends.
+- Trunk and motorway roads are not in the traffic class list.
 - Footbridge and footway networks are mostly not joined to the road graph in OSM.
 - 5 pairs of OSM ways have identical geometry. Both copies are kept, as in the source.

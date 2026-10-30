@@ -14,6 +14,10 @@ from collections import Counter, defaultdict
 
 OLD, NEW, OUT = (sys.argv[1:4] + [None] * 3)[:3]
 LAYERS = ["buildings", "water", "canals", "parks", "rails", "plazas", "bridges", "trees", "landmarks"]
+# Keep in step with DRIVE_CLASS in src/traffic/sim.ts.
+DRIVE_CLASS = {"primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link",
+               "residential", "unclassified", "service", "living_street"}
+VEHICLE_CLASS = DRIVE_CLASS | {"motorway", "motorway_link", "trunk", "trunk_link"}
 
 # ---------- UTM 46N forward (Snyder), local origin of the project ----------
 A, F = 6378137.0, 1 / 298.257223563
@@ -91,7 +95,7 @@ class Side:
             if has_bad_number(e["pts"]):
                 self.bad_numbers += 1
             self.edge_ids[e["id"]].add((e["a"], e["b"]))
-            self.edges.setdefault((e["id"], e["a"], e["b"]), (e["pts"], e.get("way"), c["ix"], c["iy"]))
+            self.edges.setdefault((e["id"], e["a"], e["b"]), (e["pts"], e.get("way"), c["ix"], c["iy"], e["cls"]))
         for k in LAYERS:
             self.layer_totals[k] += len(c.get(k) or [])
         for r in c["roads"]:
@@ -117,7 +121,7 @@ class Side:
         missing = zero = 0
         geoms = Counter()
         end_mismatch = 0
-        for (eid, a, b), (p, _w, _ix, _iy) in self.edges.items():
+        for (eid, a, b), (p, *_r) in self.edges.items():
             if a not in self.nodes or b not in self.nodes:
                 missing += 1
                 continue
@@ -162,26 +166,31 @@ class Side:
             near5 += best < 0.05
             near100 += best < 1.0
         isolated_nodes = sum(1 for n in self.nodes if deg[n] == 0)
-        # what the traffic sim can drive: it drops edges shorter than 8 m (src/traffic/sim.ts chain())
-        tp = {}
+        def subnet(keep):
+            """Largest component of the edges `keep` accepts, as a share of the nodes those edges touch."""
+            tp = {}
 
-        def tfind(a):
-            tp.setdefault(a, a)
-            while tp[a] != a:
-                tp[a] = tp[tp[a]]
-                a = tp[a]
-            return a
+            def tfind(a):
+                tp.setdefault(a, a)
+                while tp[a] != a:
+                    tp[a] = tp[tp[a]]
+                    a = tp[a]
+                return a
 
-        short = 0
-        for (eid, a, b), (p, *_r) in self.edges.items():
-            length = sum(math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]) for i in range(0, len(p) - 2, 2))
-            if length < 8:
-                short += 1
-                continue
-            ra, rb = tfind(a), tfind(b)
-            if ra != rb:
-                tp[ra] = rb
-        tsizes = sorted(Counter(tfind(n) for n in list(tp)).values(), reverse=True)
+            for (eid, a, b), (p, _w, _ix, _iy, cls) in self.edges.items():
+                length = sum(math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]) for i in range(0, len(p) - 2, 2))
+                if keep(cls, length):
+                    ra, rb = tfind(a), tfind(b)
+                    if ra != rb:
+                        tp[ra] = rb
+            s = sorted(Counter(tfind(n) for n in list(tp)).values(), reverse=True)
+            return len(s), (round(s[0] / len(tp), 4) if s else 0)
+
+        short = sum(1 for (p, _w, _ix, _iy, cls) in self.edges.values() if cls in DRIVE_CLASS and sum(
+            math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]) for i in range(0, len(p) - 2, 2)) < 8)
+        veh_n, veh_share = subnet(lambda cls, length: cls in VEHICLE_CLASS)
+        # what TrafficSim loads: its drive classes, and only edges of 8 m or more (src/traffic/sim.ts chain())
+        sim_n, sim_share = subnet(lambda cls, length: cls in DRIVE_CLASS and length >= 8)
         return {
             "nodes": len(self.nodes),
             "edges": len(self.edges),
@@ -191,9 +200,11 @@ class Side:
             "components_le_2_nodes": sum(1 for s in sizes if s <= 2),
             "components_lt_10_nodes": sum(1 for s in sizes if s < 10),
             "isolated_nodes_degree_0": isolated_nodes,
-            "traffic_edges_dropped_lt_8m": short,
-            "traffic_components": len(tsizes),
-            "traffic_largest_component_share_of_nodes": round(tsizes[0] / len(self.nodes), 4) if tsizes else 0,
+            "vehicle_network_components": veh_n,
+            "vehicle_network_largest_share_of_its_nodes": veh_share,
+            "sim_drive_edges_dropped_lt_8m": short,
+            "sim_network_components": sim_n,
+            "sim_network_largest_share_of_its_nodes": sim_share,
             "dead_ends": len(dead),
             "dead_ends_within_5cm_of_other_road": near5,
             "dead_ends_within_1m_of_other_road": near100,
