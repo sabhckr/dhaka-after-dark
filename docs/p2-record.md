@@ -199,7 +199,7 @@ Generator-owned total: 91.58 MB → 94.30 MB (+3.0 %). Its `SHA256SUMS` lists al
 
 **Risks.**
 
-- **Git history.** The swap adds about 93 MB of changed chunk blobs (roughly 23 MB compressed) to a public repository's history once pushed. The shipped v1 data stays in history.
+- **Git history.** The swap changes about 93 MB of chunk files, and the shipped v1 data stays in history. The estimate made here before the swap (roughly 23 MB compressed) was too high. Measured with `git pack-objects` after the swap: the swap commit packs to 3.9 MB because v2 only appends to each chunk, a push of `dev/engine-core` sends 6.6 MB in all (23 commits, including `dev/foundation`), and a full clone grows from 52.4 to 56.1 MB.
 - **Old builds.** A build older than 18a6169 rejects v2 chunks ("unsupported chunk version"). Code and data deploy together from one commit, so this matters only for a stale cached bundle meeting new data. The chunk URLs are not versioned.
 - **Load cost.** 5 more chunk files are fetched near the city edge. Validation costs about 0.04 ms more per chunk, and a fully parsed city takes 13 % more heap.
 - **Nothing visible changes.** Golden views are identical. Any later renderer change that uses v2 fields is separate work.
@@ -207,4 +207,4 @@ Generator-owned total: 91.58 MB → 94.30 MB (+3.0 %). Its `SHA256SUMS` lists al
 **Rollback.**
 
 - Before the commit: `git restore --source=HEAD --staged --worktree public/world`, then move the 6 added files to the Trash with `/usr/bin/trash`. Nothing else needs undoing.
-- After the commit (now): `git revert 6ee2f27`. The code reads v1 and v2, so it needs no change, and the shipped v1 files stay in history at the commit before the swap.
+- After the commit (now): `git revert 6ee2f27^..HEAD`, while nothing else sits on top. It reverts newest first: the licence and docs fix, e99363f, then the swap, so the docs never claim v2 data and no revert conflicts. The swap and the docs commits touch no file in common and the runtime code is unchanged since ef37a7d, so this returns the tree to ef37a7d exactly, a state that passed every check. Once pushed, revert; never force-push.

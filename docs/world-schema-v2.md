@@ -61,10 +61,10 @@ One kind per point node, checked in the order above. A node tagged both `highway
 
 ## Other files
 
-- `manifest.json`: `v: 2`, plus `fields`: one `{ field, src: "osm", tags, count }` per field above. Everything else is unchanged (boundary, CRS, origin, spawns, sources). `counts` gains one entry per field and layer, and `chunks` lists 1,303 chunks.
+- `manifest.json`: `v: 2`, plus `fields`: one `{ field, src: "osm", tags, count }` per field above. Boundary, CRS, origin, spawns and sources are unchanged. `gaps` gains two notes, on OSM-only attributes and on where `sig` and `cr` appear. `counts` gains one entry per field and layer, `emptyChunksInsideBoundary` drops from 37 to 32 (the five new chunks below now exist), and `chunks` lists 1,303 chunks.
 - `places.json` (new): 732 `place=*` nodes inside the boundary (400 quarters, 160 neighbourhoods, 157 suburbs, 15 others), with name, `name:en`, lon/lat and world x/z. `districtAt` in infer.ts uses the nearest suburb, quarter or neighbourhood within 1.5 km, labelled `rule`.
 - `overview.json` and `landmarks.json`: byte-identical to v1. `signs/` depends on the overview boundary, so it stays valid.
-- `coverage.json`: only `counts` changes.
+- `coverage.json`: `counts` and `gaps` change as in the manifest. Because the five new chunks now exist, `emptyChunksInsideBoundarySample` loses them and `chunkBuildingHistogram` moves by one (p50 270 → 269, p90 940 → 939). Nothing at runtime reads this file.
 
 Five chunks are new: `-1_-26`, `-4_-28`, `11_-49`, `22_-59` and `24_-32`. They hold only v2 features (four power-line pieces, one landuse piece, one point) and no v1 record. The runtime fetches them like any other chunk, and nothing draws v2 layers yet.
 
@@ -92,7 +92,7 @@ WORLD_OUT=<staging folder> node --max-old-space-size=3072 --experimental-strip-t
 
 ## Checking a staged run
 
-`diff-schema.ts` needs a v1 folder as its old side. Since the swap `public/world` is v2, so use a `WORLD_SCHEMA=1` run of the same extract, or the pre-swap tree from git (`git archive <commit before the swap> public/world | tar -x -C <dir>`).
+`diff-schema.ts` needs a v1 folder as its old side. Since the swap, `public/world` is v2, so use a `WORLD_SCHEMA=1` run of the same extract, or the pre-swap tree from git (`git archive <commit before the swap> public/world | tar -x -C <dir>`).
 
 ```bash
 node --experimental-strip-types scripts/geo/diff-schema.ts <v1 world> <stage> <report.json>

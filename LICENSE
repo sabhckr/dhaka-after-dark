@@ -20,6 +20,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-This licence covers the code. The map data in public/world/ is derived from
-OpenStreetMap and is licensed under the Open Database License 1.0
-(ODbL), © OpenStreetMap contributors: https://www.openstreetmap.org/copyright
+This licence covers the code. The map data in public/world/ and the test
+fixtures in src/geo/fixtures/ are derived from OpenStreetMap and are licensed
+under the Open Database License 1.0 (ODbL), © OpenStreetMap contributors:
+https://www.openstreetmap.org/copyright

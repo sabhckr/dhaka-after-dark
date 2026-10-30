@@ -107,4 +107,4 @@ Traffic simulation, missions, combat, animated crowds, a DEM. Figures in the San
 
 ## Licence
 
-Code: MIT, see [LICENSE](LICENSE). Map data in `public/world/`: ODbL 1.0, © OpenStreetMap contributors. Asset licences: [docs/signage-pack.md](docs/signage-pack.md).
+Code: MIT, see [LICENSE](LICENSE). Map data in `public/world/` and the test fixtures in `src/geo/fixtures/`: ODbL 1.0, © OpenStreetMap contributors. Asset licences: [docs/signage-pack.md](docs/signage-pack.md).
