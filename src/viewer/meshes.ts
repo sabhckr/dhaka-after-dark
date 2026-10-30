@@ -5,7 +5,10 @@ import { isFootSpan, solidsFromChunk } from "./solids.ts";
 import { buildFootBridgeMeshes } from "./footbridge.ts";
 import { kindFromCat, notableById } from "./landmarks.ts";
 import { filletGentleBends, miterOutline, prepareVisualRoads } from "./roads.ts";
-import { buildingCrown, facadeSlot, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks, SETBACK_CAP, wantsSetback } from "./place.ts";
+import { buildingCrown, facadeSlot, facadesOf, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks, SETBACK_CAP, wantsSetback, type Facade } from "./place.ts";
+import { containedHoles, heroDrawHeight, heroSite, type HeroKind } from "./heroes.ts";
+import type { BuildingLod } from "./lod.ts";
+import { canopyGeometry, palmGeometry, sleeperGeometry, trunkGeometry } from "./prop-geo.ts";
 
 export const BLOCK = {
   ground: 0x141816,
@@ -217,7 +220,7 @@ function pushMarker(s: Surface, x: number, z: number, h: number, kind: string) {
   }
 }
 
-/** Shop band stays at the bottom. Upper floors repeat the window tile, capped so towers stay cheap. */
+/** Shop band stays at the bottom. Upper floors repeat the window tile in UV, not as stacked coplanar quads. */
 function addWalls(
   ring: number[],
   y0: number,
@@ -227,13 +230,15 @@ function addWalls(
   tint: Tint,
   uShift = 0,
   shop = true,
+  mode: "detail" | "mass" = "detail",
+  maxSlices = MAX_FLOOR_SLICES,
 ) {
   const n = ring.length / 2;
   if (n < 2 || y1 <= y0 + 0.15) return;
   const startTri = s.idx.length / 3;
   const tileX = 10.4;
   let dist = 0;
-  const shopTop = shop ? Math.min(y1, y0 + SHOP_H) : y0;
+  const shopTop = shop && mode === "detail" ? Math.min(y1, y0 + SHOP_H) : y0;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     const ax = ring[i * 2];
@@ -244,19 +249,19 @@ function addWalls(
     const u0 = dist / tileX + uShift;
     const u1 = (dist + len) / tileX + uShift;
     dist += len;
+    if (mode === "mass") {
+      pushWallQuad(s, ax, az, bx, bz, y0, y1, u0, u1, SHOP_V, 1, tint);
+      continue;
+    }
     if (shop && shopTop > y0 + 0.05) {
       const vShop = SHOP_V * ((shopTop - y0) / SHOP_H);
       pushWallQuad(s, ax, az, bx, bz, y0, shopTop, u0, u1, 0, vShop, tint);
     }
     if (y1 <= shopTop + 0.12) continue;
     const upper = y1 - shopTop;
-    const slices = Math.min(MAX_FLOOR_SLICES, Math.max(1, Math.round(upper / 3.2)));
-    const sliceH = upper / slices;
-    for (let sli = 0; sli < slices; sli++) {
-      const a = shopTop + sli * sliceH;
-      const b = sli === slices - 1 ? y1 : shopTop + (sli + 1) * sliceH;
-      pushWallQuad(s, ax, az, bx, bz, a, b, u0, u1, SHOP_V, 1, tint);
-    }
+    const slices = Math.min(maxSlices, Math.max(1, Math.round(upper / 3.2)));
+    const v1 = SHOP_V + (1 - SHOP_V) * slices;
+    pushWallQuad(s, ax, az, bx, bz, shopTop, y1, u0, u1, SHOP_V, v1, tint);
   }
   const count = s.idx.length / 3 - startTri;
   if (count > 0) s.ranges.push({ start: startTri, count, label });
@@ -583,69 +588,18 @@ function pinsForRoad(pts: number[], near: (x: number, z: number) => boolean): bo
   return pinned;
 }
 
-function mergeParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  const pos: number[] = [];
-  const idx: number[] = [];
-  let base = 0;
-  for (const part of parts) {
-    const attr = part.getAttribute("position");
-    const index = part.getIndex();
-    for (let i = 0; i < attr.count; i++) {
-      const wobble = 1 + (((i * 17) % 9) - 4) * 0.025;
-      pos.push(attr.getX(i) * wobble, attr.getY(i), attr.getZ(i) * wobble);
-    }
-    if (index) for (let i = 0; i < index.count; i++) idx.push(index.getX(i) + base);
-    base += attr.count;
-    part.dispose();
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  geo.setIndex(idx);
-  geo.computeVertexNormals();
-  return geo;
-}
-
-/** Three offset cones. Not a sphere, and not a second tree at a new coordinate. */
-function layeredCanopy(): THREE.BufferGeometry {
-  const lower = new THREE.ConeGeometry(1.35, 0.5, 7);
-  const mid = new THREE.ConeGeometry(1.02, 0.55, 6);
-  const top = new THREE.ConeGeometry(0.58, 0.4, 5);
-  lower.translate(0.06, -0.02, -0.04);
-  mid.translate(-0.05, 0.3, 0.04);
-  top.translate(0.02, 0.58, 0);
-  return mergeParts([lower, mid, top]);
-}
-
-/** Seven fronds. Shared by every palm instance. */
-function palmFan(): THREE.BufferGeometry {
-  const pos: number[] = [];
-  const idx: number[] = [];
-  const fronds = 7;
-  for (let i = 0; i < fronds; i++) {
-    const a = (i / fronds) * Math.PI * 2;
-    const c = Math.cos(a);
-    const s = Math.sin(a);
-    const b = pos.length / 3;
-    pos.push(0, 0.05, 0, c * 0.26, 0.14, s * 0.26, c * 1.4, -0.46, s * 1.4);
-    idx.push(b, b + 1, b + 2);
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  geo.setIndex(idx);
-  geo.computeVertexNormals();
-  return geo;
-}
-
 export type ChunkObjects = ReleaseBag & { group: THREE.Group };
 
-export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkObjects {
+export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary, lod: BuildingLod = "near"): ChunkObjects {
   const group = new THREE.Group();
   group.name = `chunk-${chunk.ix}_${chunk.iy}`;
   const geometries: { dispose: () => void }[] = [];
   const instanced: { dispose: () => void }[] = [];
 
-  const add = (m: THREE.Mesh | null) => {
+  const add = (m: THREE.Mesh | null, kind = "static") => {
     if (!m) return;
+    m.userData.blockBatch = "static";
+    m.userData.batchKind = kind;
     group.add(m);
     geometries.push(m.geometry);
   };
@@ -685,13 +639,15 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
   for (const pad of visual.pads) {
     addFlat(pad.ring, undefined, pad.y, pad.marked ? marked : plain, "junction", roadTint, 8);
   }
-  add(meshFrom(marked, lib.roadMarked));
-  add(meshFrom(plain, lib.roadPlain));
-  add(meshFrom(bridge, lib.bridge));
-  add(meshFrom(walk, lib.sidewalk));
+  add(meshFrom(marked, lib.roadMarked), "roads");
+  add(meshFrom(plain, lib.roadPlain), "roads");
+  add(meshFrom(bridge, lib.bridge), "roads");
+  add(meshFrom(walk, lib.sidewalk), "roads");
 
   const foot = solidsFromChunk(chunk);
   for (const mesh of buildFootBridgeMeshes(foot.plans, lib.deck, lib.trim)) {
+    mesh.userData.blockBatch = "static";
+    mesh.userData.batchKind = "footbridge";
     group.add(mesh);
     geometries.push(mesh.geometry);
   }
@@ -706,7 +662,7 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
   ) => {
     const s = blank();
     for (const p of items) addFlat(p.outer, p.holes, y, s, `${kind} ${p.id}`, tint, tile);
-    add(meshFrom(s, mat));
+    add(meshFrom(s, mat), "ground");
   };
   buildOne(chunk.water, 0.12, lib.water, "water", [0.5, 0.58, 0.56], 18);
   buildOne(chunk.parks, 0.05, lib.park, "park", [0.62, 0.68, 0.56], 14);
@@ -715,7 +671,7 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
 
   const canal = blank();
   for (const c of chunk.canals) ribbon(c.pts, c.w / 2, 0.14, canal, `canal ${c.id} est w=${c.w}m`, [0.52, 0.62, 0.6], 16);
-  add(meshFrom(canal, lib.canal));
+  add(meshFrom(canal, lib.canal), "ground");
 
   const railBed = blank();
   const railSteel = blank();
@@ -761,12 +717,14 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
       walked += len;
     }
   }
-  add(meshFrom(railBed, lib.rail));
-  add(meshFrom(railSteel, lib.trim));
+  add(meshFrom(railBed, lib.rail), "rails");
+  add(meshFrom(railSteel, lib.trim), "rails");
   if (sleeperSpots.length) {
-    const sleeperGeo = new THREE.BoxGeometry(2.65, 0.14, 0.26);
+    const sleeperGeo = sleeperGeometry();
     const sleepers = new THREE.InstancedMesh(sleeperGeo, lib.roof, sleeperSpots.length);
     sleepers.name = "sleepers";
+    sleepers.userData.blockBatch = "instance";
+    sleepers.userData.batchGroup = "rails";
     const dummy = new THREE.Object3D();
     const sleeperTint = new THREE.Color(0x4e453c);
     for (let i = 0; i < sleeperSpots.length; i++) {
@@ -781,94 +739,16 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
     sleepers.instanceMatrix.needsUpdate = true;
     if (sleepers.instanceColor) sleepers.instanceColor.needsUpdate = true;
     group.add(sleepers);
-    geometries.push(sleeperGeo);
     instanced.push(sleepers);
   }
 
-  const walls = [0, 1, 2, 3, 4].map(() => blank());
-  const roofs = blank();
-  let parapetTris = 0;
-  let parapetBuildings = 0;
-  let serviceTris = 0;
-  let chajjaTris = 0;
-  let tinRidgeTris = 0;
-  let setbackTris = 0;
-  let setbackBuildings = 0;
-  const tankRank: { id: number; area: number }[] = [];
-  const chajjaRank: { id: number; len: number }[] = [];
-  const setbackRank: { id: number; area: number }[] = [];
-  for (const b of chunk.buildings) {
-    const crown = buildingCrown(b.id, b.h);
-    const box = footprintSpan(b.outer);
-    const area = box.sx * box.sz;
-    if (crown.tank) tankRank.push({ id: b.id, area });
-    if (crown.chajja) {
-      const edge = longestOuterEdge(b.outer);
-      if (edge) chajjaRank.push({ id: b.id, len: edge.len });
-    }
-    if (wantsSetback(b.id, b.h, b.holes?.length ?? 0)) setbackRank.push({ id: b.id, area });
-  }
-  tankRank.sort((a, b) => b.area - a.area);
-  chajjaRank.sort((a, b) => b.len - a.len);
-  setbackRank.sort((a, b) => b.area - a.area);
-  const tankIds = new Set(tankRank.slice(0, 280).map((item) => item.id));
-  const chajjaIds = new Set(chajjaRank.slice(0, 420).map((item) => item.id));
-  const setbackIds = new Set(setbackRank.slice(0, SETBACK_CAP).map((item) => item.id));
-  for (const b of chunk.buildings) {
-    const plaster = plasterTint(b.id, b.hs);
-    const slot = facadeSlot(b.id, b.h) % lib.facades.length;
-    const tint: Tint = slot >= 3 ? [0.92, 0.9, 0.86] : plaster;
-    const shift = (hash32(b.id) % 1000) / 1000;
-    const label = `building ${b.id} ${b.hs} ${b.h}m`;
-    const crown = buildingCrown(b.id, b.h);
-    const metres = b.h >= 16 ? 2.6 : 1.8;
-    const inset = setbackIds.has(b.id) ? insetRingMeters(b.outer, metres) : null;
-    const split = Math.min(SHOP_H, b.h - 2.6);
-    if (inset && split > 2.4) {
-      addWalls(b.outer, 0, split, walls[slot], label, tint, shift, true);
-      addWalls(inset, split, b.h, walls[slot], label, tint, shift, false);
-      setbackTris += addTerrace(b.outer, inset, split, roofs, label, [0.82, 0.78, 0.72]);
-      setbackBuildings++;
-    } else {
-      addWalls(b.outer, 0, b.h, walls[slot], label, tint, shift, true);
-    }
-    for (const hole of b.holes || []) addWalls(hole, 0, b.h, walls[slot], label, tint, shift, true);
-    const roofRing = inset && split > 2.4 ? inset : b.outer;
-    const roofTint: Tint = [0.42, 0.4, 0.37];
-    addFlat(roofRing, inset ? undefined : b.holes, b.h, roofs, label, roofTint, 10);
-    if (crown.parapet) {
-      const added = addParapet(roofRing, b.h, crown.parapetH, roofs, label, roofTint);
-      parapetTris += added;
-      if (added > 0) parapetBuildings++;
-    }
-    if (crown.tank && tankIds.has(b.id)) {
-      serviceTris += addServiceBox(roofRing, b.h, b.id, "tank", roofs, label, [0.22, 0.24, 0.26]);
-    }
-    if (crown.stair && !inset) serviceTris += addServiceBox(b.outer, b.h, b.id, "stair", roofs, label, [0.55, 0.52, 0.48]);
-    if (crown.chajja && chajjaIds.has(b.id)) chajjaTris += addChajja(b.outer, b.h, roofs, label, [0.78, 0.74, 0.66]);
-    if (crown.tinRidge && !inset) {
-      tinRidgeTris += addTinRidge(b.outer, b.h, 0.62 + (hash32(b.id) % 4) * 0.1, roofs, label, [0.62, 0.66, 0.62]);
-    }
-  }
-  walls.forEach((s, i) => add(meshFrom(s, lib.facades[i] ?? lib.facades[0])));
-  const roofMesh = meshFrom(roofs, lib.roof);
-  if (roofMesh) {
-    roofMesh.userData.parapetTris = parapetTris;
-    roofMesh.userData.parapetBuildings = parapetBuildings;
-    roofMesh.userData.serviceTris = serviceTris;
-    roofMesh.userData.chajjaTris = chajjaTris;
-    roofMesh.userData.tinRidgeTris = tinRidgeTris;
-    roofMesh.userData.setbackTris = setbackTris;
-    roofMesh.userData.setbackBuildings = setbackBuildings;
-    roofMesh.userData.roofTris = roofs.idx.length / 3;
-  }
-  add(roofMesh);
+  attachBuildings(group, geometries, chunk, lib, lod);
 
   const trees = chunk.trees;
   if (trees.length) {
-    const trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 1, 5);
-    const canopyGeo = layeredCanopy();
-    const palmGeo = palmFan();
+    const trunkGeo = trunkGeometry();
+    const canopyGeo = canopyGeometry();
+    const palmGeo = palmGeometry();
     const broad: typeof trees = [];
     const palms: typeof trees = [];
     for (const t of trees) {
@@ -878,6 +758,17 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
     const trunks = new THREE.InstancedMesh(trunkGeo, lib.trunk, trees.length);
     const canopies = new THREE.InstancedMesh(canopyGeo, lib.canopy, Math.max(1, broad.length));
     const palmMesh = palms.length ? new THREE.InstancedMesh(palmGeo, lib.canopy, palms.length) : null;
+    trunks.name = "trunks";
+    trunks.userData.blockBatch = "instance";
+    trunks.userData.batchGroup = "trees";
+    canopies.name = "canopies";
+    canopies.userData.blockBatch = "instance";
+    canopies.userData.batchGroup = "trees";
+    if (palmMesh) {
+      palmMesh.name = "palms";
+      palmMesh.userData.blockBatch = "instance";
+      palmMesh.userData.batchGroup = "trees";
+    }
     const dummy = new THREE.Object3D();
     const color = new THREE.Color();
     const placeTrunk = (t: (typeof trees)[number], i: number, thin: boolean) => {
@@ -927,14 +818,12 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
     if (palmMesh) {
       palmMesh.instanceMatrix.needsUpdate = true;
       if (palmMesh.instanceColor) palmMesh.instanceColor.needsUpdate = true;
-      palmMesh.name = "palms";
     }
     const veg = new THREE.Group();
     veg.name = "trees";
     veg.add(trunks, canopies);
     if (palmMesh) veg.add(palmMesh);
     group.add(veg);
-    geometries.push(trunkGeo, canopyGeo, palmGeo);
     instanced.push(trunks, canopies);
     if (palmMesh) instanced.push(palmMesh);
   }
@@ -950,11 +839,280 @@ export function buildChunkObjects(chunk: ChunkFile, lib: SurfaceLibrary): ChunkO
     const mesh = meshFrom(marker, lib.landmark);
     if (mesh) {
       mesh.userData.landmarks = chunk.landmarks;
-      add(mesh);
+      add(mesh, "landmarks");
     }
   }
 
   return { group, geometries, instanced };
+}
+
+/** Swap only the building group. Roads, rails, trees, and shared materials stay. */
+export function retileBuildings(bag: ChunkObjects, chunk: ChunkFile, lib: SurfaceLibrary, lod: BuildingLod): boolean {
+  if (bag.group.userData.lod === lod && bag.group.getObjectByName("buildings")) return false;
+  const old = bag.group.getObjectByName("buildings");
+  if (old) {
+    const owned = (old.userData.owned as { dispose: () => void }[] | undefined) ?? [];
+    for (const geo of owned) {
+      const i = bag.geometries.indexOf(geo);
+      if (i >= 0) bag.geometries.splice(i, 1);
+      geo.dispose();
+    }
+    bag.group.remove(old);
+  }
+  attachBuildings(bag.group, bag.geometries, chunk, lib, lod);
+  return true;
+}
+
+function outsetIndex(s: Surface, face: Facade, t: number, y: number, tint: Tint, out: number): number {
+  const base = s.pos.length / 3;
+  pushV(s, face.ax + (face.bx - face.ax) * t + face.nx * out, y, face.az + (face.bz - face.az) * t + face.nz * out, t, y * 0.04, tint);
+  return base;
+}
+
+function pushOutsetQuad(s: Surface, face: Facade, t0: number, t1: number, y0: number, y1: number, tint: Tint, out: number): void {
+  const a = outsetIndex(s, face, t0, y0, tint, out);
+  const b = outsetIndex(s, face, t0, y1, tint, out);
+  const c = outsetIndex(s, face, t1, y0, tint, out);
+  const d = outsetIndex(s, face, t1, y1, tint, out);
+  s.idx.push(a, c, b, b, c, d);
+}
+
+function pushDisc(s: Surface, face: Facade, y: number, t: number, radius: number, tint: Tint, out: number): void {
+  const sides = 10;
+  const center = outsetIndex(s, face, t, y, tint, out);
+  const ring: number[] = [];
+  for (let i = 0; i < sides; i++) {
+    const a = (i / sides) * Math.PI * 2;
+    ring.push(outsetIndex(s, face, t + (Math.cos(a) * radius) / face.len, y + Math.sin(a) * radius, tint, out));
+  }
+  for (let i = 0; i < sides; i++) s.idx.push(center, ring[i], ring[(i + 1) % sides]);
+}
+
+/** Horizontal joints, a circle, or a triangle. These sit on the real wall. They are not cut openings. */
+function addSangsadFace(ring: number[], h: number, s: Surface, label: string): number {
+  const faces = facadesOf(ring).filter((face) => face.len > 12).slice(0, 6);
+  if (!faces.length || h < 8) return 0;
+  const start = s.idx.length / 3;
+  const joint: Tint = [0.91, 0.89, 0.85];
+  const voidTint: Tint = [0.09, 0.08, 0.07];
+  faces.forEach((face, i) => {
+    for (let y = 3.4; y < h - 1; y += 3.6) pushOutsetQuad(s, face, 0.03, 0.97, y, y + 0.2, joint, 0.07);
+    const radius = Math.min(4.6, face.len * 0.13, h * 0.13);
+    if (radius < 1.5) return;
+    const cy = Math.max(radius + 2, Math.min(h * 0.46, h - radius - 1.2));
+    if (i % 2 === 0) {
+      pushDisc(s, face, cy, 0.5, radius, voidTint, 0.18);
+      return;
+    }
+    const half = Math.min(0.18, (radius * 1.35) / face.len);
+    const top = outsetIndex(s, face, 0.5, cy + radius, voidTint, 0.18);
+    const left = outsetIndex(s, face, 0.5 - half, cy - radius * 0.75, voidTint, 0.18);
+    const right = outsetIndex(s, face, 0.5 + half, cy - radius * 0.75, voidTint, 0.18);
+    s.idx.push(top, left, right);
+  });
+  const count = s.idx.length / 3 - start;
+  if (count > 0) s.ranges.push({ start, count, label: `${label} opening` });
+  return count;
+}
+
+function addFrontBays(ring: number[], h: number, s: Surface, label: string, kind: "ahsan" | "curzon" | "museum"): number {
+  const face = facadesOf(ring).find((item) => item.len > 8);
+  if (!face || h < 6) return 0;
+  const start = s.idx.length / 3;
+  const dark: Tint = [0.12, 0.1, 0.09];
+  const white: Tint = [0.95, 0.92, 0.88];
+  if (kind === "museum") {
+    const bays = Math.min(9, Math.max(4, Math.floor(face.len / 6)));
+    for (let i = 0; i < bays; i++) {
+      const t = (i + 0.5) / bays;
+      pushOutsetQuad(s, face, t - 0.4 / face.len, t + 0.4 / face.len, 2.2, h - 2.4, dark, 0.12);
+    }
+    pushOutsetQuad(s, face, 0.08, 0.92, h - 1.6, h - 0.7, [0.2, 0.32, 0.5], 0.1);
+  } else {
+    const bays = Math.min(kind === "ahsan" ? 7 : 5, Math.max(3, Math.floor(face.len / (kind === "ahsan" ? 4.2 : 5.5))));
+    for (let i = 0; i <= bays; i++) {
+      const t = (i + 0.5) / (bays + 1);
+      const half = 0.22 / face.len;
+      pushOutsetQuad(s, face, t - half, t + half, 0.4, h - 1.1, kind === "ahsan" ? white : [0.72, 0.62, 0.5], 0.22);
+    }
+    for (let i = 0; i < bays; i++) {
+      const t0 = (i + 0.85) / (bays + 1);
+      const t1 = (i + 1.65) / (bays + 1);
+      const top = kind === "curzon" ? Math.min(h - 3.2, 7.2) : h * 0.62;
+      pushOutsetQuad(s, face, t0, t1, 2.4, top, dark, 0.1);
+      if (kind === "curzon") pushDisc(s, face, top, (t0 + t1) / 2, Math.min(1.3, ((t1 - t0) * face.len) / 2), dark, 0.1);
+    }
+    pushOutsetQuad(s, face, 0.04, 0.96, h - 1.15, h - 0.55, white, 0.12);
+  }
+  const count = s.idx.length / 3 - start;
+  if (count > 0) s.ranges.push({ start, count, label: `${label} opening` });
+  return count;
+}
+
+/** Landmark crown on the concrete roof mesh. A few boxes, not a second building. */
+function addHeroCrown(kind: HeroKind, ring: number[], h: number, s: Surface, label: string, span: number): void {
+  const box = footprintSpan(ring);
+  const c = ringCentroid(ring);
+  if (!c || box.sx < 8 || box.sz < 8) return;
+  const white: Tint = [0.95, 0.92, 0.88];
+  const stone: Tint = [0.72, 0.7, 0.66];
+  if (kind === "sangsad") {
+    addSangsadFace(ring, h, s, label);
+    if (span < 80) {
+      const hx = Math.min(6, box.sx * 0.22);
+      const hz = Math.min(6, box.sz * 0.22);
+      if (boxInside(c.x, c.z, hx, hz, ring)) upright(s, c.x, c.z, h, h + 2.4, hx, hz, stone);
+    }
+    return;
+  }
+  if (kind === "ahsan") {
+    addFrontBays(ring, h, s, label, "ahsan");
+    const spots: [number, number, number][] = [
+      [box.minX + 4, c.z, 7],
+      [box.maxX - 4, c.z, 7],
+      [c.x, c.z, 3.4],
+    ];
+    for (const [x, z, rise] of spots) {
+      const hx = rise > 5 ? 1.8 : 2.4;
+      const hz = rise > 5 ? 1.8 : 2.2;
+      if (!boxInside(x, z, hx, hz, ring)) continue;
+      upright(s, x, z, h, h + rise, hx, hz, white);
+    }
+    return;
+  }
+  if (kind === "curzon") {
+    addFrontBays(ring, h, s, label, "curzon");
+    if (boxInside(c.x, c.z, 2.6, 2.6, ring)) {
+      upright(s, c.x, c.z, h, h + 4, 2.6, 2.6, white);
+      upright(s, c.x, c.z, h + 4, h + 7.5, 1.3, 1.3, white);
+    }
+    const brick: Tint = [0.5, 0.24, 0.2];
+    if (boxInside(box.minX + 3.5, c.z, 1.5, 1.5, ring)) upright(s, box.minX + 3.5, c.z, h, h + 6, 1.5, 1.5, brick);
+    if (boxInside(box.maxX - 3.5, c.z, 1.5, 1.5, ring)) upright(s, box.maxX - 3.5, c.z, h, h + 6, 1.5, 1.5, brick);
+    return;
+  }
+  if (kind === "museum") {
+    addFrontBays(ring, h, s, label, "museum");
+    if (boxInside(c.x, c.z, 2.2, 2.2, ring)) upright(s, c.x, c.z, h, h + 2.2, Math.min(18, box.sx * 0.28), 2.2, [0.22, 0.32, 0.48]);
+  }
+}
+
+function attachBuildings(
+  group: THREE.Group,
+  geometries: { dispose: () => void }[],
+  chunk: ChunkFile,
+  lib: SurfaceLibrary,
+  lod: BuildingLod,
+) {
+  const buildings = new THREE.Group();
+  buildings.name = "buildings";
+  const owned: { dispose: () => void }[] = [];
+  const addB = (m: THREE.Mesh | null) => {
+    if (!m) return;
+    buildings.add(m);
+    geometries.push(m.geometry);
+    owned.push(m.geometry);
+  };
+  const wallSlots = lod === "near" ? Math.max(1, lib.facades.length) : 1;
+  const wallMode = lod === "far" ? "mass" : "detail";
+  const clutter = lod === "near";
+  const walls = Array.from({ length: wallSlots }, () => blank());
+  const roofs = blank();
+  let parapetTris = 0;
+  let parapetBuildings = 0;
+  let serviceTris = 0;
+  let chajjaTris = 0;
+  let tinRidgeTris = 0;
+  let setbackTris = 0;
+  let setbackBuildings = 0;
+  const tankRank: { id: number; area: number }[] = [];
+  const chajjaRank: { id: number; len: number }[] = [];
+  const setbackRank: { id: number; area: number }[] = [];
+  for (const b of chunk.buildings) {
+    if (heroSite(b.id)) continue;
+    const crown = buildingCrown(b.id, b.h);
+    const box = footprintSpan(b.outer);
+    const area = box.sx * box.sz;
+    if (clutter && crown.tank) tankRank.push({ id: b.id, area });
+    if (clutter && crown.chajja) {
+      const edge = longestOuterEdge(b.outer);
+      if (edge) chajjaRank.push({ id: b.id, len: edge.len });
+    }
+    if (wantsSetback(b.id, b.h, b.holes?.length ?? 0)) setbackRank.push({ id: b.id, area });
+  }
+  tankRank.sort((a, b) => b.area - a.area);
+  chajjaRank.sort((a, b) => b.len - a.len);
+  setbackRank.sort((a, b) => b.area - a.area);
+  const tankIds = new Set(tankRank.slice(0, 280).map((item) => item.id));
+  const chajjaIds = new Set(chajjaRank.slice(0, 420).map((item) => item.id));
+  const setbackIds = new Set(setbackRank.slice(0, SETBACK_CAP).map((item) => item.id));
+  for (const b of chunk.buildings) {
+    const site = heroSite(b.id);
+    if (site) {
+      const box = footprintSpan(b.outer);
+      const span = Math.max(box.sx, box.sz);
+      const drawH = heroDrawHeight(site, span);
+      const holes = containedHoles(b.outer, b.holes);
+      const label = `${site.name} · approximate ${drawH}m · way ${b.id}`;
+      addWalls(b.outer, 0, drawH, roofs, label, site.tint, 0, false, "mass");
+      for (const hole of holes) addWalls(hole, 0, drawH, roofs, label, site.tint, 0, false, "mass");
+      addFlat(b.outer, holes, drawH, roofs, label, site.roof, 10);
+      addHeroCrown(site.kind, b.outer, drawH, roofs, label, span);
+      continue;
+    }
+    const plaster = plasterTint(b.id, b.hs);
+    const rawSlot = facadeSlot(b.id, b.h) % lib.facades.length;
+    const slot = rawSlot % wallSlots;
+    const tint: Tint = rawSlot >= 3 ? [0.92, 0.9, 0.86] : plaster;
+    const shift = (hash32(b.id) % 1000) / 1000;
+    const label = `building ${b.id} ${b.hs} ${b.h}m`;
+    const crown = buildingCrown(b.id, b.h);
+    const metres = b.h >= 16 ? 2.6 : 1.8;
+    const inset = setbackIds.has(b.id) ? insetRingMeters(b.outer, metres) : null;
+    const split = Math.min(SHOP_H, b.h - 2.6);
+    const stepped = Boolean(inset && split > 2.4);
+    if (stepped && inset) {
+      addWalls(b.outer, 0, split, walls[slot], label, tint, shift, true, wallMode);
+      addWalls(inset, split, b.h, walls[slot], label, tint, shift, false, wallMode);
+      setbackTris += addTerrace(b.outer, inset, split, roofs, label, [0.82, 0.78, 0.72]);
+      setbackBuildings++;
+    } else {
+      addWalls(b.outer, 0, b.h, walls[slot], label, tint, shift, true, wallMode);
+    }
+    for (const hole of b.holes || []) addWalls(hole, 0, b.h, walls[slot], label, tint, shift, true, wallMode);
+    const roofRing = stepped && inset ? inset : b.outer;
+    const roofTint: Tint = [0.42, 0.4, 0.37];
+    addFlat(roofRing, stepped ? undefined : b.holes, b.h, roofs, label, roofTint, 10);
+    if (lod !== "far" && crown.parapet) {
+      const added = addParapet(roofRing, b.h, crown.parapetH, roofs, label, roofTint);
+      parapetTris += added;
+      if (added > 0) parapetBuildings++;
+    }
+    if (clutter && crown.tank && tankIds.has(b.id)) {
+      serviceTris += addServiceBox(roofRing, b.h, b.id, "tank", roofs, label, [0.22, 0.24, 0.26]);
+    }
+    if (clutter && crown.stair && !stepped) serviceTris += addServiceBox(b.outer, b.h, b.id, "stair", roofs, label, [0.55, 0.52, 0.48]);
+    if (clutter && crown.chajja && chajjaIds.has(b.id)) chajjaTris += addChajja(b.outer, b.h, roofs, label, [0.78, 0.74, 0.66]);
+    if (clutter && crown.tinRidge && !stepped) {
+      tinRidgeTris += addTinRidge(b.outer, b.h, 0.62 + (hash32(b.id) % 4) * 0.1, roofs, label, [0.62, 0.66, 0.62]);
+    }
+  }
+  walls.forEach((s, i) => addB(meshFrom(s, lib.facades[i] ?? lib.facades[0])));
+  const roofMesh = meshFrom(roofs, lib.roof);
+  if (roofMesh) {
+    roofMesh.userData.parapetTris = parapetTris;
+    roofMesh.userData.parapetBuildings = parapetBuildings;
+    roofMesh.userData.serviceTris = serviceTris;
+    roofMesh.userData.chajjaTris = chajjaTris;
+    roofMesh.userData.tinRidgeTris = tinRidgeTris;
+    roofMesh.userData.setbackTris = setbackTris;
+    roofMesh.userData.setbackBuildings = setbackBuildings;
+    roofMesh.userData.roofTris = roofs.idx.length / 3;
+  }
+  addB(roofMesh);
+  buildings.userData.owned = owned;
+  group.add(buildings);
+  group.userData.lod = lod;
 }
 
 export function labelFromHit(hit: THREE.Intersection): string | null {

@@ -68,8 +68,10 @@ export function createCityLife(scene: THREE.Scene, world: SolidWorld) {
       const walking =
         npc.state === "WALKING" || npc.state === "FLEEING" || npc.state === "CROSSING_ROAD" || npc.state === "RUNNING" || npc.state === "INVESTIGATING";
       const bob = walking ? Math.abs(Math.sin(npc.bob * 2.2)) * 0.045 : 0;
+      const serving = npc.anim === "serve" && npc.anchorKey.startsWith("pitch:") && npc.interact === "player";
       group.position.set(npc.x, npc.y + bob, npc.z);
       group.rotation.y = npc.yaw + Math.PI;
+      group.rotation.x = serving ? 0.22 : 0;
       group.visible = npc.state !== "DESPAWNING";
       group.userData.anim = npc.anim;
     }
@@ -108,7 +110,7 @@ export function createCityLife(scene: THREE.Scene, world: SolidWorld) {
       pop.tick(dt);
       sync();
     },
-    setQuality(quality: "low" | "high") {
+    setQuality(quality: "low" | "medium" | "high") {
       pop.setQuality(quality);
     },
     interact() {

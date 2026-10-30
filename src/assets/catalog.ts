@@ -84,8 +84,6 @@ export type Placement = {
   where: string;
 };
 
-const SHOW = "Showroom model only. The live map already has OSM geometry here, so this mesh is not dropped on top of it.";
-
 function entry(
   id: string,
   name: string,
@@ -168,11 +166,11 @@ export const CATALOG: AssetRecord[] = [
   entry("hawk-daily", "Daily essentials", "Hawkers", "TEXTURED", "Small goods table.", "Generic mudir dokan table.", buildDailyStall),
   entry("hawk-tea", "Tea stall", "Hawkers", "TEXTURED", "Cha table, kettle, umbrella.", "The sign says চা. It is not a traced shopfront.", buildTeaStall),
   entry("hawk-flower", "Flower stall", "Hawkers", "TEXTURED", "Cut flowers.", "Shahbagh has a real flower market. This stall is the type, not a surveyed kiosk.", buildFlowerStall),
-  entry("lm-sangsad", "Jatiya Sangsad", "Landmarks", "TEXTURED", "Disc and blocks.", `${SHOW} Louis Kahn's assembly building is a drum in a complex, not this simplified mass.`, buildSangsad),
-  entry("lm-ahsan", "Ahsan Manzil", "Landmarks", "TEXTURED", "Pink palace block.", `${SHOW} The real palace faces the Buriganga and is already an OSM footprint.`, buildAhsan),
-  entry("lm-lalbagh", "Lalbagh Fort", "Landmarks", "TEXTURED", "Red fort walls and a tomb.", `${SHOW} Mughal fort at Lalbagh. Walls are a blockout.`, buildLalbagh),
-  entry("lm-museum", "National Museum", "Landmarks", "TEXTURED", "Shahbagh museum block.", `${SHOW} Bangladesh National Museum, Shahbagh.`, buildMuseum),
-  entry("lm-curzon", "Curzon Hall", "Landmarks", "TEXTURED", "Red academic block with a dome.", `${SHOW} The sheet's university photo reads as Curzon Hall, Dhaka University, not the whole campus.`, buildCurzon),
+  entry("lm-sangsad", "Jatiya Sangsad", "Landmarks", "TEXTURED", "Disc and blocks.", "Showroom mass only. The city dresses OSM way 18085267 on its real footprint. This disc is not dropped on top.", buildSangsad),
+  entry("lm-ahsan", "Ahsan Manzil", "Landmarks", "TEXTURED", "Pink palace block.", "Showroom mass only. The city dresses OSM way 624025793, the footprint on the Ahsan Manzil node.", buildAhsan),
+  entry("lm-lalbagh", "Lalbagh Fort", "Landmarks", "TEXTURED", "Red fort walls, a gate, and a tomb.", "Mughal fort at the OSM archaeological site. This courtyard is a blockout of the type, not the full rampart or a measured plan.", buildLalbagh),
+  entry("lm-museum", "National Museum", "Landmarks", "TEXTURED", "Shahbagh museum block.", "Showroom mass only. The city dresses OSM way 7392256 at Shahbagh.", buildMuseum),
+  entry("lm-curzon", "Curzon Hall", "Landmarks", "TEXTURED", "Red academic block with a dome.", "Showroom mass only. The city dresses OSM way 1132918478 near Curzon Hall. It is not the whole campus.", buildCurzon),
   entry("infra-footbridge", "Footbridge", "Infrastructure", "TEXTURED", "Deck, rails, two stair runs.", "The live map already builds OSM footbridges. This is the showroom module, not a second bridge in the world.", buildFootbridge),
   entry("infra-flyover", "Flyover", "Infrastructure", "TEXTURED", "Short elevated deck and two piers.", "OSM already marks vehicle bridges. This segment is not laid over a real flyover.", buildFlyover),
   entry("infra-road", "Road and sidewalk", "Infrastructure", "TEXTURED", "Asphalt, curbs, a lane dash.", "Sample cross-section. City roads stay on their OSM centerlines.", buildRoadDiorama),
@@ -213,6 +211,14 @@ export const PLACEMENTS: Placement[] = [
   { assetId: "metro-train", x: 4320, z: -27140, yaw: Math.PI / 2, y: 5.2, where: "Sitting on the display viaduct" },
   { assetId: "rail-train", x: 7680, z: -11950, yaw: 0.2, y: 0.3, where: "Kamalapur spawn, offset from the station footprint" },
   { assetId: "air-biman", x: 4780, z: -24240, yaw: 0.5, y: 0.3, where: "Shahjalal spawn, offset so it is not inside the terminal mass" },
+  {
+    assetId: "lm-lalbagh",
+    x: 3713.4,
+    z: -10540.5,
+    yaw: 0.08,
+    y: 0.2,
+    where: "OSM node 13954132428, Lalbagh Fort. A courtyard blockout on the site, not the full rampart. Neighbouring footprints stay.",
+  },
 ];
 
 const placed = new Set(PLACEMENTS.map((p) => p.assetId));

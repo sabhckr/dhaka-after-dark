@@ -229,10 +229,10 @@ export function rankShops<T extends ShopRec>(shops: T[], limit: number): T[] {
     .slice(0, limit);
 }
 
-export function posterBudget(buildingCount: number, ix: number, iy: number, quality: "low" | "high"): number {
+export function posterBudget(buildingCount: number, ix: number, iy: number, quality: "low" | "medium" | "high"): number {
   const n = hash32(ix * 374761393 + iy * 668265263);
   const density = 0.4 + (n % 100) / 250;
-  const cap = quality === "high" ? 48 : 10;
+  const cap = quality === "high" ? 48 : quality === "medium" ? 22 : 10;
   return Math.max(0, Math.min(cap, Math.round(buildingCount * 0.12 * density)));
 }
 

@@ -1,5 +1,6 @@
 import { CHUNK_SIZE } from "../geo/chunks.ts";
 import type { ChunkFile, RoadRec } from "../geo/types.ts";
+import { containedHoles, heroDrawHeight, heroSite } from "./heroes.ts";
 import { pointInOuter } from "./place.ts";
 
 /**
@@ -165,6 +166,20 @@ function railWalls(walls: SegWall[], pts: number[], ys: number[], half: number) 
   }
 }
 
+function ringSpan(outer: number[]): number {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < outer.length; i += 2) {
+    minX = Math.min(minX, outer[i]);
+    maxX = Math.max(maxX, outer[i]);
+    minZ = Math.min(minZ, outer[i + 1]);
+    maxZ = Math.max(maxZ, outer[i + 1]);
+  }
+  return Math.max(maxX - minX, maxZ - minZ);
+}
+
 export function solidsFromChunk(chunk: ChunkFile): { bucket: SolidBucket; plans: FootPlan[] } {
   const walls: SegWall[] = [];
   const decks: DeckSpan[] = [];
@@ -174,9 +189,13 @@ export function solidsFromChunk(chunk: ChunkFile): { bucket: SolidBucket; plans:
 
   for (const b of chunk.buildings) {
     if (b.outer.length < 6 || b.h < 0.4) continue;
-    pushEdges(walls, b.outer, 0, b.h);
-    for (const hole of b.holes || []) pushEdges(walls, hole, 0, b.h);
-    roofs.push({ id: b.id, outer: b.outer, holes: b.holes || [], y: b.h });
+    const site = heroSite(b.id);
+    const span = ringSpan(b.outer);
+    const h = site ? heroDrawHeight(site, span) : b.h;
+    const holes = site ? containedHoles(b.outer, b.holes) : b.holes || [];
+    pushEdges(walls, b.outer, 0, h);
+    for (const hole of holes) pushEdges(walls, hole, 0, h);
+    roofs.push({ id: b.id, outer: b.outer, holes, y: h });
   }
 
   for (const r of chunk.roads) {

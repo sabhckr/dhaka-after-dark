@@ -62,3 +62,51 @@ After FogExp2, far-prop hiding, and the road nudge, one stationary day sample (2
 
 Fog did not change the triangle census. The p95 gap is still the software renderer, not the fog shader. Do not treat 178 ms as a GPU-bound city frame.
 
+## 2026-10-29 render pass
+
+Same machine, SwiftShader, 1280×720, device pixel ratio 1, day, clear. `renderer.render` stays about 4–12 ms. The frame gap is the software GPU presenting the city. That is not a 30 FPS result, and it is not evidence about an i3 with integrated graphics.
+
+### Where the old cost was
+
+Committed builder, Dhanmondi 5×5 (25 chunks), every building at full detail, no people and no dressing. Counted from the scene graph, not the frustum:
+
+| Group | Meshes | Triangles |
+| --- | --- | --- |
+| Buildings | 129 | 850,965 |
+| Vegetation | 72 | 61,344 |
+| Roads | 80 | 15,882 |
+| Footbridges | 20 | 10,640 |
+| Everything else | 67 | 7,254 |
+| Total | 368 | 946,085 |
+
+Buildings were about 90% of the triangles. Most of that was coplanar floor quads: the window tile was repeated by stacking a quad per storey. Roads were a small triangle count and a large mesh count (one mesh per material per chunk).
+
+A rendered frame of 308 draws and 645,780 triangles was the number to explain. This census is the unculled 25-chunk neighbourhood, so it is higher than a single view. The draws track the mesh count. The triangles track the buildings.
+
+### After, same camera family
+
+Sangsad was already loaded, then the camera moved to Dhanmondi. Chebyshev unload is 4, so the neighbourhoods overlap and **32 chunks** stay loaded. Elevated fly pose `(2342, 80, -13588)`, then the same pose at street level, then Motijheel on foot after streaming settled.
+
+| Pose | Chunks | Draws | Triangles | Render JS median | Gap median | Gap p95 | Frames in the window |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Dhanmondi elevated, high | 32 | 243 | 518,422 | 8 ms | 1676 ms | 2974 ms | 5 |
+| Dhanmondi elevated, medium | 32 | 225 | 466,640 | — | one 8 s hitch, no included frame | — | 0 |
+| Dhanmondi elevated, low | 32 | 232 | 361,865 | 4 ms | 4468 ms | 4468 ms | 1 |
+| Dhanmondi street, high | 32 | 258 | 500,206 | — | HUD 5583 ms, window missed | — | 0 |
+| Motijheel street, high | 25 | 185 | 263,712 | 5 ms | 1261 ms | 1261 ms | 1 |
+
+High scene-graph census at the elevated pose: chunk buildings 196 meshes / 737,881 triangles, loaded-set batches 22 meshes / 117,621 triangles, people 50 meshes, the Sangsad asset yard 146 meshes / 13,350 triangles (culled from this view), traffic 7 instanced batches. JS heap was about 165 MB and fell to 137 MB after the stream moved to Motijheel. No GPU memory counter.
+
+Low at the same 32 chunks cut rendered triangles from 518k to 362k and tree instances from 3,376 to 1,384. Draws stayed near 230 because each loaded chunk still has its own building mesh and each person is still several meshes. Medium sits between them on triangles (467k) with the mid band covering the loaded set except the current chunk.
+
+30 FPS was not achieved here. The software renderer is not the target PC.
+
+### What changed
+
+- Near walls keep the shop band and repeat the window tile in UV. Far walls are one quad. Setbacks and courtyard holes stay at every level. Parapets stay on near and mid. Tanks, chajjas, stairs, and tin ridges stay on near.
+- Roads, ground, rails, landmarks, footbridges, trees, lamps, tanks, antennas, and sleepers batch across the loaded chunks, one mesh per material. Buildings do not, so chunk culling and LOD swaps still work.
+- Low / medium / high are separate caps for LOD distance, trees, dressing, pedestrians (10 / 16 / 26), traffic (6 / 10 / 14), pixel ratio, and texture anisotropy. Shadows stay off on every preset.
+
+### Still expensive
+
+Per-chunk building meshes, pedestrian clones (about eight meshes each), and the 146-mesh asset yard when the Sangsad pad is on screen. A merged building mesh would cut draws and would also shade every off-screen wall. That was left undone on purpose.

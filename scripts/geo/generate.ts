@@ -46,7 +46,7 @@ type WayRec = { id: number; refs: Int32Array; tags: Tags | null };
 type RelRec = { id: number; tags: Tags; members: { type: string; id: number; role: string }[] };
 
 const SPAWN_SEEDS: { id: string; name: string; lon: number; lat: number; y: number; yaw: number }[] = [
-  { id: "sangsad", name: "Jatiya Sangsad", lon: 90.3786, lat: 23.7625, y: 48, yaw: 0.4 },
+  { id: "sangsad", name: "Jatiya Sangsad", lon: 90.3786, lat: 23.7625, y: 120, yaw: 0.4 },
   { id: "shahbagh", name: "Shahbagh", lon: 90.3958, lat: 23.7389, y: 32, yaw: 0 },
   { id: "motijheel", name: "Motijheel", lon: 90.4172, lat: 23.727, y: 36, yaw: 0 },
   { id: "gulshan", name: "Gulshan 1", lon: 90.4168, lat: 23.7806, y: 40, yaw: 0 },

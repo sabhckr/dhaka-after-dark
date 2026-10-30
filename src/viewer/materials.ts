@@ -4,6 +4,7 @@ import { LOOKS, type CityLook } from "@/viewer/looks.ts";
 import { canvasTexture, makeAsphalt, makeBallast, makeBark, makeCanopy, makeConcreteMaps, makeFacade, makePark, makeRoof, makeSidewalk, makeWater } from "@/viewer/proc-tex.ts";
 import { buildPosterSheets, type CellUV } from "@/viewer/posters.ts";
 import type { SurfaceLibrary } from "@/viewer/meshes.ts";
+import { anisotropyCap, normalAmp, type RenderQuality } from "@/viewer/lod.ts";
 
 export type CityMaterials = {
   surfaces: SurfaceLibrary;
@@ -21,7 +22,7 @@ export type CityMaterials = {
   trackShop: (mat: THREE.MeshStandardMaterial) => void;
   untrackShop: (mat: THREE.MeshStandardMaterial) => void;
   applyLook: (look: CityLook, scene: THREE.Scene, renderer: THREE.WebGLRenderer, lights: CityLights, settled?: boolean) => void;
-  setQuality: (quality: "low" | "high") => void;
+  setQuality: (quality: RenderQuality) => void;
   tick: (dt: number, lightning: number) => void;
   dispose: () => void;
 };
@@ -455,14 +456,14 @@ export function createCityMaterials(renderer: THREE.WebGLRenderer, fontOk: boole
     }
   };
 
-  const setQuality = (quality: "low" | "high") => {
-    cable.color.setHex(quality === "high" ? 0x1a1614 : 0x2a2622);
-    const amp = quality === "high" ? 1 : 0.2;
+  const setQuality = (quality: RenderQuality) => {
+    cable.color.setHex(quality === "low" ? 0x2a2622 : 0x1a1614);
+    const amp = normalAmp(quality);
     for (const mat of normalMats) {
       const base = (mat.userData.normalAmp as number) || 0.4;
       mat.normalScale.set(base * amp, base * amp);
     }
-    const aniso = quality === "high" ? 8 : 1;
+    const aniso = anisotropyCap(quality);
     for (const tex of textures) tex.anisotropy = aniso;
   };
 

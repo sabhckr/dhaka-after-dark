@@ -5,7 +5,7 @@ import { releaseChunkResources } from "../geo/streaming.ts";
 import { displayShopName, isNamedShop, shopCategory } from "../geo/shops.ts";
 import type { ChunkFile } from "../geo/types.ts";
 import { POSTER_SPECS, USER_MEME, forbiddenPolitical } from "./copy.ts";
-import { buildChunkObjects, type SurfaceLibrary } from "./meshes.ts";
+import { buildChunkObjects, retileBuildings, type SurfaceLibrary } from "./meshes.ts";
 import {
   buildingCrown,
   cableSegments,
@@ -268,3 +268,135 @@ test("cables are deterministic and do not move footprints", () => {
   ];
   assert.deepEqual(cableSegments(buildings, 10), cableSegments(buildings, 10));
 });
+
+test("far and mid lods keep the setback and drop near-only clutter", () => {
+  let id = 0;
+  for (let n = 1; n < 800; n++) {
+    if (wantsSetback(n, 12, 0)) {
+      id = n;
+      break;
+    }
+  }
+  const chunk = fixture();
+  chunk.buildings = [{ id, h: 12, hs: "measured", outer: [0, 0, 20, 0, 20, 14, 0, 14] }];
+  const lib = lambertLib();
+  const count = (lod: "near" | "mid" | "far") => {
+    const built = buildChunkObjects(chunk, lib, lod);
+    const root = built.group.getObjectByName("buildings");
+    assert.ok(root);
+    let meshes = 0;
+    let setbacks = 0;
+    let service = 0;
+    let tris = 0;
+    root.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      meshes++;
+      if (mesh.userData.setbackBuildings) setbacks = mesh.userData.setbackBuildings as number;
+      if (mesh.userData.serviceTris) service = mesh.userData.serviceTris as number;
+      const index = mesh.geometry.getIndex();
+      if (index) tris += index.count / 3;
+    });
+    releaseChunkResources(built);
+    return { meshes, setbacks, service, tris };
+  };
+  const near = count("near");
+  const mid = count("mid");
+  const far = count("far");
+  assert.equal(near.setbacks, 1);
+  assert.equal(mid.setbacks, 1);
+  assert.equal(far.setbacks, 1);
+  assert.equal(far.service, 0);
+  assert.ok(far.tris < near.tris);
+  assert.ok(far.meshes <= 2);
+  assert.ok(mid.tris <= near.tris);
+  const live = buildChunkObjects(chunk, lib, "near");
+  let disposed = 0;
+  const original = lib.roof.dispose.bind(lib.roof);
+  lib.roof.dispose = () => {
+    disposed += 1;
+  };
+  assert.equal(retileBuildings(live, chunk, lib, "far"), true);
+  assert.equal(retileBuildings(live, chunk, lib, "far"), false);
+  assert.equal(live.group.userData.lod, "far");
+  assert.equal(live.group.children.filter((child) => child.name === "buildings").length, 1);
+  assert.equal(disposed, 0);
+  lib.roof.dispose = original;
+  releaseChunkResources(live);
+});
+
+test("near facades repeat window rows in uv instead of stacked quads", () => {
+  let id = 0;
+  for (let n = 1; n < 4000; n++) {
+    if (!wantsSetback(n, 22, 0)) {
+      id = n;
+      break;
+    }
+  }
+  const chunk = fixture();
+  chunk.buildings = [{ id, h: 22, hs: "estimated", outer: [0, 0, 16, 0, 16, 12, 0, 12] }];
+  const built = buildChunkObjects(chunk, lambertLib(), "near");
+  const root = built.group.getObjectByName("buildings");
+  assert.ok(root);
+  let wallTris = 0;
+  let maxV = 0;
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || mesh.userData.roofTris) return;
+    const index = mesh.geometry.getIndex();
+    if (index) wallTris += index.count / 3;
+    const uv = mesh.geometry.getAttribute("uv");
+    if (!uv) return;
+    for (let i = 0; i < uv.count; i++) maxV = Math.max(maxV, uv.getY(i));
+  });
+  assert.equal(wallTris, 16);
+  assert.ok(maxV > 1.5);
+  releaseChunkResources(built);
+});
+
+test("far lod keeps a courtyard opening", () => {
+  let id = 0;
+  for (let n = 1; n < 4000; n++) {
+    if (!wantsSetback(n, 14, 0)) {
+      id = n;
+      break;
+    }
+  }
+  const lib = lambertLib();
+  const base = fixture();
+  base.buildings = [{ id, h: 14, hs: "estimated", outer: [0, 0, 24, 0, 24, 18, 0, 18] }];
+  const open = fixture();
+  open.buildings = [{ id, h: 14, hs: "estimated", outer: [0, 0, 24, 0, 24, 18, 0, 18], holes: [[6, 5, 6, 12, 16, 12, 16, 5]] }];
+  const tris = (chunk: ChunkFile) => {
+    const built = buildChunkObjects(chunk, lib, "far");
+    let n = 0;
+    built.group.getObjectByName("buildings")?.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const index = mesh.geometry.getIndex();
+      if (index) n += index.count / 3;
+    });
+    releaseChunkResources(built);
+    return n;
+  };
+  assert.ok(tris(open) > tris(base));
+});
+
+test("retile disposes the old building geometry and leaves roads in place", () => {
+  const chunk = fixture();
+  const lib = lambertLib();
+  const live = buildChunkObjects(chunk, lib, "near");
+  const before = new Set(live.geometries);
+  const roads = live.group.children.filter((child) => child.userData.batchKind === "roads").length;
+  assert.ok(roads >= 1);
+  assert.equal(retileBuildings(live, chunk, lib, "far"), true);
+  let removed = 0;
+  for (const geo of before) {
+    if (!live.geometries.includes(geo)) removed++;
+  }
+  assert.ok(removed >= 1);
+  assert.equal(live.group.children.filter((child) => child.userData.batchKind === "roads").length, roads);
+  assert.equal(live.group.children.filter((child) => child.name === "buildings").length, 1);
+  releaseChunkResources(live);
+});
+
