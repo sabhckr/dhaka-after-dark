@@ -142,3 +142,36 @@ Still on the main thread, and the likely source of the remaining 0.9–1 s stall
 - `buildChunkObjects` and `buildDressing`
 - `PedNav.rebuild` over every loaded chunk, which also clears every NPC path
 - the full `rebuildEdges` road index
+
+## 2026-10-30 P1: streaming without long frames, far ring
+
+Machine and method as above (M1 Air 8 GB, ANGLE Metal, headless Chrome, 60 Hz cap), with 2.4 GB of swap in use. `npm run perf:ab` alternated build A (the P0 commit `cfcc122`, game code as `30a1ada`) and build B (this branch) for 3 rounds, twice. Figures are medians over rounds; the second run, after the code moved into `src/engine/`, is shown.
+
+| | A: P0 | B: P1 |
+| --- | --- | --- |
+| Teleport to Old Dhaka (8 km): worst frame | 517 ms | 52 ms |
+| same: p99 / p95 | 128 / 73 ms | 45 / 35 ms |
+| same: frames over 100 ms | 4 | 0 |
+| same: ring loaded (no fetch in flight, queue empty) | 1.61 s | 0.82 s |
+| Teleport to Uttara (18 km): worst frame | 389 ms | 44 ms |
+| same: p99 / p95 | 119 / 66 ms | 26 / 20 ms |
+| same: ring loaded | 1.42 s | 0.81 s |
+| Steady median, 3 views | 16.7 ms (vsync) | 16.7 ms (vsync) |
+| Draws at Kawran street / Gulshan aerial | 129 / 103 | 153 / 141 |
+| Triangles drawn, Kawran street / Gulshan aerial | 335k / 381k | 465k / 556k |
+| JS heap, Kawran street | 248 MB | 275 MB |
+
+The first run gave the same picture (worst 552 → 59 ms and 417 → 43 ms; heap 154 → 275 MB at Kawran street in that run). Steady state is at the 60 Hz cap on both builds, so this machine cannot show whether the far ring costs frame time below the cap.
+
+Where the A-side time went, from a CPU profile of a ring load: `PedNav` rebuilt the whole pedestrian graph from every loaded chunk each time one chunk arrived (about 2 s of main-thread time per ring). After the fix the per-stage timer (`window.__perf.loads()`) reads, for one ring of 21-25 chunks: meshes 140-250 ms in total (worst chunk 28 ms), dressing 75-120 ms (worst 17 ms), pedestrian graph 45-56 ms (worst 14 ms), parse 6-8 ms (worst 1.4 ms).
+
+What changed:
+
+- `PedNav` plans a chunk once, joins new chunks in place and builds the replacement after an unload in 3 ms slices. A script compared it with the old code over 101 load and unload steps in three districts: identical graph after every step.
+- Chunk work goes through `IntegrationQueue`, 6 ms a frame.
+- The far ring (`src/engine/far-ring.ts`) draws building masses and water to radius 6 on High: about 290k triangles around Kawran, 3 materials per 3x3 block, built only when the streamed ring is idle (worst 6.5 ms a cell).
+- The scheduler prefetches around a point 2.5 s ahead along recent travel and no longer requests cells that have no chunk file.
+
+Golden views (`npm run look:compare`, P0 against P1): all 9 street views and all medium views are "same". The aerial views differ in the horizon band, where the city now continues instead of ending in a white band 1.25 km out (Kawran aerial day: 29% of the second band changed, under 1.1% anywhere below it). Day fog is still FogExp2 0.00062: at 2.5 km it hides about 91% and at 3 km about 97%, so in practice the visible city ends around 2.5 km. The fog itself was not changed in P1.
+
+Not done in P1: Web Workers (not needed for the budgets, see engine.md); a BVH for picking; a memory cap with LRU unload beyond the existing unload radius.
