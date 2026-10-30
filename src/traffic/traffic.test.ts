@@ -82,6 +82,31 @@ test("cross traffic holds at a red phase and the open axis does not", () => {
   assert.equal(sim.green("m", 1), false);
 });
 
+test("a bending approach holds at red without jumping back and crosses on green", () => {
+  const sim = new TrafficSim();
+  sim.time = 0.1;
+  sim.setChunk("c", [
+    // Runs east, then turns north into the junction for its last six metres.
+    edge("bend", "w", "m", [-20, -4, 37, -5, 40, 0]),
+    edge("east", "m", "e", [40, 0, 80, 0]),
+    edge("north", "m", "n", [40, 0, 40, 40]),
+    edge("south", "s", "m", [40, -40, 40, -10, 40, 0]),
+  ]);
+  const car = sim.addCar({ kind: "car", edge: "c|bend", dir: 1, s: 46, speed: 8, cruise: 8 })!;
+  let back = 0;
+  let last = car.s;
+  for (let t = 0; t < 6; t += 1 / 60) {
+    sim.tick(1 / 60, { x: 40, z: 0 });
+    if (car.edge === "c|bend" && car.s < last - 1e-6) back++;
+    last = car.s;
+  }
+  assert.equal(car.edge, "c|bend");
+  assert.equal(car.held, "signal");
+  assert.equal(back, 0);
+  for (let t = 0; t < 4; t += 1 / 60) sim.tick(1 / 60, { x: 40, z: 0 });
+  assert.notEqual(car.edge, "c|bend");
+});
+
 test("unload drops cars whose edge left with the chunk", () => {
   const sim = new TrafficSim();
   sim.setChunk("c", [edge("e", "a", "b", [0, 0, 40, 0])]);

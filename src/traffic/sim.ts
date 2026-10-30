@@ -355,9 +355,13 @@ export class TrafficSim {
 
       const remain = edge.len - car.s;
       const node = car.dir === 1 ? edge.b : edge.a;
-      const axis: 0 | 1 = Math.abs(here.dx) >= Math.abs(here.dz) ? 0 : 1;
-      if (remain < 16 && !this.green(node, axis)) {
-        const stopAt = edge.len - 6.5;
+      // The phase follows the approach into the node, not the car's local heading: on a
+      // bending edge the local heading can swap axis between two frames and never settle.
+      const into = poseAt(edge, car.dir, edge.len);
+      const axis: 0 | 1 = Math.abs(into.dx) >= Math.abs(into.dz) ? 0 : 1;
+      const stopAt = edge.len - 6.5;
+      // A car already past the stop line clears the junction instead of jumping back to it.
+      if (remain < 16 && !this.green(node, axis) && car.s <= stopAt + 0.5) {
         if (car.s >= stopAt - 0.4) {
           limit = 0;
           car.s = Math.min(car.s, stopAt);
