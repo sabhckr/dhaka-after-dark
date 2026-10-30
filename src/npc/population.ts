@@ -5,6 +5,7 @@ import { intentFor } from "./anim.ts";
 import { tryTransition } from "./machine.ts";
 import { PedNav } from "./nav.ts";
 import { PROFILE_LIST, PROFILES } from "./profiles.ts";
+import { Counter, PITCHES, type Pitch } from "./purchase.ts";
 import { moveSolid, type SolidWorld } from "../viewer/solids.ts";
 import type { ChunkFile } from "../geo/types.ts";
 import { approachAngle, hashStr, type DayPart, type Npc, type PlayerSample, type RoleId } from "./types.ts";
@@ -82,6 +83,7 @@ export class Population {
   readonly clock = new SimClock();
   readonly npcs: Npc[] = [];
   readonly world: SolidWorld;
+  readonly counter = new Counter();
   debug = false;
   max: number;
   spawnRadius: number;
@@ -146,6 +148,7 @@ export class Population {
     this.clock.advance(step);
     this.bus.advance(step);
     this.noteDanger(step);
+    this.counter.tick(step, this.player.x, this.player.z, this.player.y, this.player.mode);
     this.refreshIn -= step;
     if (this.refreshIn <= 0) {
       this.refresh();
@@ -180,6 +183,15 @@ export class Population {
       }
       this.stepBody(npc, step, dist);
       npc.anim = intentFor(npc.state, PROFILES[npc.role].capabilities.includes("phone") && npc.state === "IDLE" && npc.seed % 2 === 0);
+      const sale = this.counter.sale;
+      if (sale && npc.id === `pitch-${sale.pitchId}`) {
+        npc.anim = "serve";
+        npc.interact = "player";
+        npc.interactAge = 0.5;
+        const dx = this.player.x - npc.x;
+        const dz = this.player.z - npc.z;
+        if (Math.hypot(dx, dz) > 0.3) npc.yaw = Math.atan2(-dx, -dz);
+      }
       if (npc.state === "DESPAWNING" && npc.stateAge > 0.6) {
         npc.alive = false;
         this.npcs.splice(i, 1);
@@ -193,6 +205,7 @@ export class Population {
   }
 
   interact(): string | null {
+    if (this.counter.sale && this.counter.sale.phase !== "served") return `sale:${this.counter.sale.pitchId}`;
     if (this.interactLock) {
       const locked = this.npcs.find((npc) => npc.id === this.interactLock);
       if (locked && locked.interact) return locked.id;
@@ -200,12 +213,23 @@ export class Population {
     }
     let best: Npc | null = null;
     let bestD = 2.5;
+    let fare: Npc | null = null;
+    let fareD = 2.5;
     for (const npc of this.npcs) {
       const d = Math.hypot(npc.x - this.player.x, npc.z - this.player.z);
       if (d < bestD) {
         bestD = d;
         best = npc;
       }
+      if (d < fareD && PROFILES[npc.role].capabilities.includes("fare")) {
+        fareD = d;
+        fare = npc;
+      }
+    }
+    if (fare) best = fare;
+    else {
+      const sale = this.counter.begin(this.player.x, this.player.z, this.player.y, this.player.mode);
+      if (sale && this.counter.sale) return `sale:${this.counter.sale.pitchId}`;
     }
     if (!best) return null;
     const ctx: BrainWorld = {
@@ -309,12 +333,19 @@ export class Population {
   }
 
   hudLine(): string {
-    if (!this.debug) return `people ${this.npcs.length}    ${this.clock.label}`;
+    const sale = this.counter.line();
+    const near = !sale && this.player.mode !== "fly" && this.player.y <= 8 ? this.counter.nearest(this.player.x, this.player.z) : null;
+    const tail = sale || (near ? `G buys ${near.name} for ${near.price} taka` : "");
+    if (!this.debug) {
+      const base = `people ${this.npcs.length}    ${this.clock.label}`;
+      return tail ? `${base}    ${tail}` : base;
+    }
     const snap = this.snapshot();
     const sel = snap.selected;
-    return sel
+    const base = sel
       ? `people ${snap.count}  ${sel.name}  ${sel.state}  ${sel.fail ?? sel.last}  path ${sel.pathLeft}  ai ${snap.aiMs.toFixed(2)} ms`
       : `people ${snap.count}  nobody near  ai ${snap.aiMs.toFixed(2)} ms`;
+    return tail ? `${base}    ${tail}` : base;
   }
 
   nearest(x = this.player.x, z = this.player.z): Npc | null {
@@ -364,6 +395,7 @@ export class Population {
         this.npcs.splice(i, 1);
       }
     }
+    this.ensurePitches();
     if (this.npcs.length >= this.max) return;
     if (this.player.y > 80) return;
     const nodes = this.nav.walkNodesNear(this.player.x, this.player.z, this.spawnRadius);
@@ -395,6 +427,79 @@ export class Population {
       budget--;
     }
     this.considerSnatch();
+    this.greetPitches();
+  }
+
+  /** Keep a seller beside each placed tea and flower stall while the player is near. */
+  private ensurePitches(): void {
+    if (this.player.y > 80) return;
+    for (const pitch of PITCHES) {
+      const id = `pitch-${pitch.id}`;
+      if (this.npcs.some((npc) => npc.id === id)) continue;
+      const dist = Math.hypot(pitch.x - this.player.x, pitch.z - this.player.z);
+      if (dist > this.spawnRadius) continue;
+      if (this.npcs.length >= this.max) {
+        let far: Npc | null = null;
+        let farD = -1;
+        for (const npc of this.npcs) {
+          if (npc.id.startsWith("pitch-")) continue;
+          const d = Math.hypot(npc.x - this.player.x, npc.z - this.player.z);
+          if (d > farD) {
+            farD = d;
+            far = npc;
+          }
+        }
+        if (!far) continue;
+        this.npcs.splice(this.npcs.indexOf(far), 1);
+      }
+      const spot = this.placePitch(pitch);
+      const seed = hashStr(pitch.id);
+      const npc = blank(pitch.role, spot.x, spot.z, "pitch", `pitch:${pitch.id}`, seed);
+      npc.id = id;
+      npc.y = spot.y;
+      npc.activity = "vend";
+      npc.state = "WORKING";
+      npc.part = this.clock.part;
+      const dx = pitch.x - spot.x;
+      const dz = pitch.z - spot.z;
+      if (Math.hypot(dx, dz) > 0.2) npc.yaw = Math.atan2(-dx, -dz);
+      this.npcs.push(npc);
+    }
+  }
+
+  private placePitch(pitch: Pitch): { x: number; z: number; y: number } {
+    const toward = (scale: number) => ({
+      x: pitch.x + (pitch.standX - pitch.x) * scale,
+      z: pitch.z + (pitch.standZ - pitch.z) * scale,
+    });
+    for (const scale of [1, 1.45, 0.55]) {
+      const at = toward(scale);
+      const spot = this.clearSpot(at.x, at.z);
+      if (spot) return spot;
+    }
+    return { x: pitch.standX, z: pitch.standZ, y: 0 };
+  }
+
+  /** One idle civilian near a pitch stops to look, instead of every passer starting a queue. */
+  private greetPitches(): void {
+    for (const pitch of PITCHES) {
+      const keeper = this.npcs.find((npc) => npc.id === `pitch-${pitch.id}` && npc.state === "WORKING");
+      if (!keeper) continue;
+      const busy = this.npcs.some(
+        (npc) => npc.state === "SHOPPING" && Math.hypot(npc.x - keeper.x, npc.z - keeper.z) < 6,
+      );
+      if (busy) continue;
+      const guest = this.npcs.find(
+        (npc) =>
+          npc.id !== keeper.id &&
+          npc.state === "IDLE" &&
+          npc.stateAge > 1.2 &&
+          PROFILES[npc.role].capabilities.includes("social") &&
+          Math.hypot(npc.x - keeper.x, npc.z - keeper.z) < 5.5,
+      );
+      if (!guest) continue;
+      if (tryTransition(guest, "SHOPPING", "pitch")) guest.socialLeft = 2.5;
+    }
   }
 
   private considerSnatch(): void {

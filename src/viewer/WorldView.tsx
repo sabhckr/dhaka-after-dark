@@ -1065,7 +1065,7 @@ export function WorldView() {
               {fontNote ? <p className="mt-2 text-xs text-accent">{fontNote}</p> : null}
               <p className="mt-2 text-xs leading-relaxed text-muted">
                 Fly is the default: WASD along the view, A and D strafe. Walk is on foot and cannot pass through buildings. Drive is a car — A turns left, D turns right, and walls stop it. F, C, and V switch modes. Q and E yaw. Space up and Ctrl down while flying. Shift is faster. R returns to spawn.
-                People on the loaded sidewalks use the same walls as you. G talks, hails a rickshaw or CNG, or buys tea. N shows what the nearest person is doing. They are blockout figures, not skeletal actors. Cars, CNGs, buses, and bikes drive the loaded road graph, stop for a simple signal, and leave a gap. They are not the showroom models.
+                People on the loaded sidewalks use the same walls as you. G talks or hails a rickshaw or CNG. On foot at the Shahbagh tea or flower stall, G orders, waits, and pays — 15 taka for tea, 40 for a bunch. Walk away and the order is dropped. Nothing is placed in the hand. N shows what the nearest person is doing. They are blockout figures, not skeletal actors. Cars, CNGs, buses, and bikes drive the loaded road graph, stop for a simple signal, and leave a gap. They are not the showroom models.
                 Keys 1–6 switch day, sunset, dusk, night, wet, and overcast. The grade stays the same; only the light changes. Click the city for mouse look. Click the map to jump. Models opens the mesh index. A yard of figures and vehicles sits on the service road just north of the Sangsad pad — fly down.
               </p>
               <p className="mt-2 text-[11px] leading-relaxed text-muted">

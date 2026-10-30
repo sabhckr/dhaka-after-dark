@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-29",
+  "updated": "2026-10-30",
   "engine": "three.js + vite. Native engine migration not started. See docs/engine.md.",
   "fps90": "NOT MEASURED. This workspace has a software GPU only. Do not treat a SwiftShader frame gap as the high-end PC.",
   "items": [
@@ -9,7 +9,7 @@
     { "id": "lm-museum", "name": "Bangladesh National Museum", "status": "INTEGRATED", "note": "OSM way 7392256 at Shahbagh. Exterior mass only." },
     { "id": "lm-curzon", "name": "Curzon Hall", "status": "INTEGRATED", "note": "OSM way 1132918478, nearest large footprint. Not the whole campus and not a measured hall." },
     { "id": "markets", "name": "Kawran Bazar and New Market", "status": "ASSET ACQUIRED", "note": "Showroom stall clusters only. Not the market sheds." },
-    { "id": "stalls", "name": "Food, phone, book, clothing, daily, tea, flower", "status": "ASSET ACQUIRED", "note": "Tea and flower are placed at Shahbagh as props. No purchase loop, so they are not marked INTEGRATED." },
+    { "id": "stalls", "name": "Food, phone, book, clothing, daily, tea, flower", "status": "INTEGRATED", "note": "Shahbagh tea and flower only. G on foot orders, waits, and pays 15 or 40 taka. A keeper stays beside each table and one nearby civilian can browse. Walk-off cancels. No held prop, no skeletal clip, and the other stall types are still props." },
     { "id": "airport", "name": "Shahjalal terminal, interior, aircraft", "status": "ASSET ACQUIRED", "note": "One Biman-colored jet is placed, offset. No logos. No flight sim." },
     { "id": "terminals", "name": "Gabtoli and Mohakhali", "status": "ASSET ACQUIRED", "note": "Showroom bays. Buses do not serve them." },
     { "id": "rail", "name": "Benapole Express, track, Kamalapur", "status": "ASSET ACQUIRED", "note": "A loco and coach sit near Kamalapur. They do not run the rail graph." },

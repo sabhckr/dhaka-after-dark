@@ -16,7 +16,7 @@ The model index orbits the meshes in `src/assets/`. It does not show the referen
 Placed, not surveyed:
 
 - Sangsad service road, just north of the default pad: police officer, two Gen Z figures, burqa, huzur, hawker, stall keeper, cycle rickshaw, CNG, motorcycle, police sedan, Green Line coach.
-- Shahbagh shoulder: flower stall, tea stall, two students. The real flower market is in this area. The stall is the type, not a mapped kiosk.
+- Shahbagh shoulder: flower stall, tea stall, two students. The real flower market is in this area. The stall is the type, not a mapped kiosk. On foot, G at the table orders tea (15 taka) or flowers (40 taka), waits, and the keeper beside the table leans in. Leaving cancels the wait. There is no cup or bunch in the hand, and no skeletal serve clip.
 - Uttara: easy-bike, plus a metro car sitting on a short display viaduct. That viaduct is not the Line 6 alignment.
 - Kamalapur: Benapole-style loco and coach, offset from the station building.
 - Shahjalal: one Biman-colored jet, offset from the terminal.

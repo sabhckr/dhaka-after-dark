@@ -142,15 +142,18 @@ export function decideNpc(npc: Npc, world: BrainWorld): void {
   if (!npc.alive || npc.state === "DESPAWNING") return;
   const profile = PROFILES[npc.role];
   const part = dayPart(world.minutes);
+  const pitch = npc.anchorKey.startsWith("pitch:");
   if (part !== npc.part) {
     npc.part = part;
-    if (isInterrupt(npc.state)) npc.scheduleDirty = true;
+    if (pitch) npc.scheduleDirty = false;
+    else if (isInterrupt(npc.state)) npc.scheduleDirty = true;
     else applyActivity(npc, profile.schedule[part]);
   }
-  if (npc.scheduleDirty && !isInterrupt(npc.state)) {
+  if (!pitch && npc.scheduleDirty && !isInterrupt(npc.state)) {
     applyActivity(npc, profile.schedule[npc.part]);
     return;
   }
+  if (pitch) npc.activity = "vend";
 
   if (npc.pendingEvent != null) {
     npc.reaction -= Math.max(npc.think, 0.05);
@@ -271,6 +274,7 @@ export function decideNpc(npc: Npc, world: BrainWorld): void {
   }
 
   if ((activity === "vend" || activity === "work") && npc.state === "WORKING") {
+    if (npc.anchorKey.startsWith("pitch:")) return;
     const roam = profile.capabilities.includes("vend") ? 5 : profile.id === "cleaner" || profile.id === "construction" ? 8 : 0;
     if (roam > 0 && npc.stateAge > 6) {
       const dest = world.nav.pickDest(npc.anchorX, npc.anchorZ, "walk", hashStr(npc.id + String(Math.floor(npc.stateAge))) , 2, roam);

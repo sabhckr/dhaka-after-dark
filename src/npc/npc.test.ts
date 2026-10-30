@@ -10,6 +10,7 @@ import { viewBlocked } from "./events.ts";
 import { canTransition, finishInterrupt, interrupt, tryTransition } from "./machine.ts";
 import { PedNav } from "./nav.ts";
 import { Population } from "./population.ts";
+import { Counter, PITCHES } from "./purchase.ts";
 import { PROFILE_LIST, PROFILES, profileIssues } from "./profiles.ts";
 
 function chunk(partial: Partial<ChunkFile> & Pick<ChunkFile, "graph">): ChunkFile {
@@ -359,4 +360,82 @@ test("hailing a rickshaw boards, and a second hail does not stack", () => {
   const second = pop.interact();
   assert.equal(second, driver.id);
   assert.notEqual(other.state, "SOCIALIZING");
+});
+
+test("Shahbagh tea and flower sales wait, finish, and cancel if you leave", () => {
+  assert.equal(PITCHES.length, 2);
+  const tea = PITCHES.find((pitch) => pitch.offer === "tea");
+  const flower = PITCHES.find((pitch) => pitch.offer === "flower");
+  assert.ok(tea && flower);
+  assert.equal(tea.price, 15);
+  assert.equal(flower.price, 40);
+  const counter = new Counter();
+  assert.equal(counter.begin(tea.x, tea.z, 30, "fly"), null);
+  assert.equal(counter.begin(tea.x + 40, tea.z, 1.6, "walk"), null);
+  assert.match(counter.begin(tea.x + 1, tea.z, 1.6, "walk") ?? "", /চা/);
+  counter.tick(0.2, tea.x, tea.z, 1.6, "walk");
+  assert.equal(counter.sale?.phase, "order");
+  counter.tick(0.2, tea.x, tea.z, 1.6, "walk");
+  assert.equal(counter.sale?.phase, "wait");
+  const age = counter.sale?.age ?? 0;
+  assert.match(counter.begin(tea.x, tea.z, 1.6, "walk") ?? "", /waiting/);
+  assert.equal(counter.sale?.age, age);
+  counter.tick(0.05, tea.x + 20, tea.z, 1.6, "walk");
+  assert.equal(counter.sale == null, true);
+  assert.equal(counter.completed, 0);
+  assert.equal(counter.cancelled, 1);
+
+  assert.match(counter.begin(flower.x, flower.z + 0.4, 1.6, "walk") ?? "", /ফুল/);
+  counter.tick(0.4, flower.x, flower.z, 1.6, "walk");
+  assert.equal(counter.sale?.phase, "wait");
+  counter.tick(flower.wait, flower.x, flower.z, 1.6, "walk");
+  assert.equal(counter.sale?.phase, "served");
+  assert.equal(counter.completed, 1);
+  counter.tick(2.3, flower.x, flower.z, 1.6, "walk");
+  assert.equal(counter.sale == null, true);
+  assert.match(counter.line(), /Flowers/);
+});
+
+test("a grounded press at the Shahbagh tea stall sells, and the keeper stays put", () => {
+  const { pop } = worldWith(street());
+  const tea = PITCHES.find((pitch) => pitch.offer === "tea")!;
+  pop.player = { x: tea.x + 1.1, y: 1.6, z: tea.z, mode: "walk", speed: 0 };
+  pop.tick(0.1);
+  const keeper = pop.npcs.find((npc) => npc.id === "pitch-hawk-tea");
+  assert.ok(keeper);
+  assert.equal(keeper.anchorKey, "pitch:hawk-tea");
+  assert.equal(pop.interact(), "sale:hawk-tea");
+  const x0 = keeper.x;
+  const z0 = keeper.z;
+  for (let i = 0; i < 30; i++) pop.tick(0.1);
+  assert.ok(Math.hypot(keeper.x - x0, keeper.z - z0) < 1.2, "pitch keeper walked off");
+  assert.equal(pop.counter.completed, 1);
+  assert.equal(keeper.anim, "serve");
+});
+
+test("a rickshaw in reach is hailed instead of starting a sale", () => {
+  const { pop } = worldWith(street());
+  const tea = PITCHES.find((pitch) => pitch.offer === "tea")!;
+  pop.player = { x: tea.x + 1.1, y: 1.6, z: tea.z, mode: "walk", speed: 0 };
+  pop.tick(0.1);
+  const driver = pop.spawnAgent("rickshaw", tea.x + 1.5, tea.z + 0.4)!;
+  driver.state = "WAITING";
+  driver.activity = "wait-fare";
+  driver.stateAge = 1;
+  assert.equal(pop.interact(), driver.id);
+  assert.equal(driver.state, "BOARDING_VEHICLE");
+  assert.equal(pop.counter.sale == null, true);
+});
+
+test("an idle civilian beside the tea pitch browses instead of every passer queuing", () => {
+  const { pop } = worldWith(street());
+  const tea = PITCHES.find((pitch) => pitch.offer === "tea")!;
+  pop.player = { x: tea.x, y: 1.6, z: tea.z, mode: "walk", speed: 0 };
+  pop.tick(0.1);
+  const guest = pop.spawnAgent("genz-m", tea.x + 1.2, tea.z + 1.2)!;
+  guest.state = "IDLE";
+  guest.activity = "work";
+  guest.stateAge = 0.5;
+  for (let i = 0; i < 12; i++) pop.tick(0.1);
+  assert.equal(guest.state, "SHOPPING");
 });
