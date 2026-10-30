@@ -75,11 +75,16 @@ test("the parliament rings are concrete masses at the reference height and still
   const box = new THREE.Box3().setFromObject(buildings);
   assert.ok(box.max.y > 47 && box.max.y < 52, `center block height ${box.max.y}`);
   let named = false;
+  let openings = 0;
   buildings.traverse((obj) => {
-    const ranges = (obj as THREE.Mesh).userData.ranges as { label: string }[] | undefined;
-    if (ranges?.some((range) => range.label.includes("Jatiya Sangsad"))) named = true;
+    const ranges = (obj as THREE.Mesh).userData.ranges as { label: string; count: number }[] | undefined;
+    for (const range of ranges ?? []) {
+      if (range.label.includes("Jatiya Sangsad")) named = true;
+      if (range.label.includes("opening")) openings += range.count;
+    }
   });
   assert.equal(named, true);
+  assert.ok(openings > 20, `sangsad openings ${openings}`);
   const solid = solidsFromChunk(file);
   assert.ok(solid.bucket.walls.some((wall) => wall.y1 === 47));
   assert.ok(solid.bucket.roofs.some((roof) => roof.y === 47));

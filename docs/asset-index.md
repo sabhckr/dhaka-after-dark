@@ -24,7 +24,7 @@ Placed, not surveyed:
 
 The city also dresses four OSM footprints in place, instead of dropping a second mesh on them:
 
-- Jatiya Sangsad, way 18085267. Peripheral mass 33.5 m, inner ring 47 m. Those figures are the published block heights, not a survey. OSM had estimated 9 m. Collision uses the same heights.
+- Jatiya Sangsad, way 18085267. Peripheral mass 33.5 m, inner ring 47 m. Those figures are the published block heights, not a survey. Horizontal joints, circles, and triangles are painted on the walls. They are not holes cut through the concrete. OSM had estimated 9 m. Collision uses the same heights.
 - Ahsan Manzil, way 624025793, on the palace node. Pink mass and towers.
 - Bangladesh National Museum, way 7392256 at Shahbagh.
 - Curzon Hall, way 1132918478, the nearest large footprint at the university. Not the whole campus.

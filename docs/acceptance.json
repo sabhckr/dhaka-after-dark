@@ -3,7 +3,7 @@
   "engine": "three.js + vite. Native engine migration not started. See docs/engine.md.",
   "fps90": "NOT MEASURED. This workspace has a software GPU only. Do not treat a SwiftShader frame gap as the high-end PC.",
   "items": [
-    { "id": "lm-sangsad", "name": "Jatiya Sangsad Bhaban", "status": "INTEGRATED", "note": "OSM way 18085267 kept. Visual and collision height 33.5 m peripheral, 47 m inner ring. Concrete mass, not a scanned Kahn model." },
+    { "id": "lm-sangsad", "name": "Jatiya Sangsad Bhaban", "status": "INTEGRATED", "note": "OSM way 18085267 kept. Visual and collision height 33.5 m peripheral, 47 m inner ring. Horizontal joints, circles, and triangles sit on the walls. They are not cut openings and not a scanned Kahn model." },
     { "id": "lm-ahsan", "name": "Ahsan Manzil", "status": "INTEGRATED", "note": "OSM way 624025793. Pink mass and towers. Reference approximation." },
     { "id": "lm-lalbagh", "name": "Lalbagh Fort", "status": "INTEGRATED", "note": "Courtyard mesh on OSM node 13954132428. Not the full rampart." },
     { "id": "lm-museum", "name": "Bangladesh National Museum", "status": "INTEGRATED", "note": "OSM way 7392256 at Shahbagh. Exterior mass only." },

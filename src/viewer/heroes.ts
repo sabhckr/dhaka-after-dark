@@ -32,7 +32,7 @@ export const HERO_SITES: HeroSite[] = [
     tint: [0.78, 0.76, 0.72],
     roof: [0.68, 0.66, 0.62],
     source:
-      "OSM way 18085267 at Sher-e-Bangla Nagar. Peripheral blocks use 33.5 m and the inner ring 47 m, from published descriptions of Kahn's assembly (about 110 ft and 155 ft). OSM had estimated 9 m. Not a measured model.",
+      "OSM way 18085267 at Sher-e-Bangla Nagar. Peripheral blocks use 33.5 m and the inner ring 47 m, from published descriptions of Kahn's assembly (about 110 ft and 155 ft). Horizontal joints, circles, and triangles are painted on the walls. They are not cut through the concrete. OSM had estimated 9 m.",
   },
   {
     buildingId: 624025793,

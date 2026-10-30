@@ -5,7 +5,7 @@ import { isFootSpan, solidsFromChunk } from "./solids.ts";
 import { buildFootBridgeMeshes } from "./footbridge.ts";
 import { kindFromCat, notableById } from "./landmarks.ts";
 import { filletGentleBends, miterOutline, prepareVisualRoads } from "./roads.ts";
-import { buildingCrown, facadeSlot, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks, SETBACK_CAP, wantsSetback } from "./place.ts";
+import { buildingCrown, facadeSlot, facadesOf, hash32, plasterTint, pointInOuter, ringCentroid, roadWantsMarks, SETBACK_CAP, wantsSetback, type Facade } from "./place.ts";
 import { containedHoles, heroDrawHeight, heroSite, type HeroKind } from "./heroes.ts";
 import type { BuildingLod } from "./lod.ts";
 import { canopyGeometry, palmGeometry, sleeperGeometry, trunkGeometry } from "./prop-geo.ts";
@@ -863,6 +863,92 @@ export function retileBuildings(bag: ChunkObjects, chunk: ChunkFile, lib: Surfac
   return true;
 }
 
+function outsetIndex(s: Surface, face: Facade, t: number, y: number, tint: Tint, out: number): number {
+  const base = s.pos.length / 3;
+  pushV(s, face.ax + (face.bx - face.ax) * t + face.nx * out, y, face.az + (face.bz - face.az) * t + face.nz * out, t, y * 0.04, tint);
+  return base;
+}
+
+function pushOutsetQuad(s: Surface, face: Facade, t0: number, t1: number, y0: number, y1: number, tint: Tint, out: number): void {
+  const a = outsetIndex(s, face, t0, y0, tint, out);
+  const b = outsetIndex(s, face, t0, y1, tint, out);
+  const c = outsetIndex(s, face, t1, y0, tint, out);
+  const d = outsetIndex(s, face, t1, y1, tint, out);
+  s.idx.push(a, c, b, b, c, d);
+}
+
+function pushDisc(s: Surface, face: Facade, y: number, t: number, radius: number, tint: Tint, out: number): void {
+  const sides = 10;
+  const center = outsetIndex(s, face, t, y, tint, out);
+  const ring: number[] = [];
+  for (let i = 0; i < sides; i++) {
+    const a = (i / sides) * Math.PI * 2;
+    ring.push(outsetIndex(s, face, t + (Math.cos(a) * radius) / face.len, y + Math.sin(a) * radius, tint, out));
+  }
+  for (let i = 0; i < sides; i++) s.idx.push(center, ring[i], ring[(i + 1) % sides]);
+}
+
+/** Horizontal joints, a circle, or a triangle. These sit on the real wall. They are not cut openings. */
+function addSangsadFace(ring: number[], h: number, s: Surface, label: string): number {
+  const faces = facadesOf(ring).filter((face) => face.len > 12).slice(0, 6);
+  if (!faces.length || h < 8) return 0;
+  const start = s.idx.length / 3;
+  const joint: Tint = [0.91, 0.89, 0.85];
+  const voidTint: Tint = [0.09, 0.08, 0.07];
+  faces.forEach((face, i) => {
+    for (let y = 3.4; y < h - 1; y += 3.6) pushOutsetQuad(s, face, 0.03, 0.97, y, y + 0.2, joint, 0.07);
+    const radius = Math.min(4.6, face.len * 0.13, h * 0.13);
+    if (radius < 1.5) return;
+    const cy = Math.max(radius + 2, Math.min(h * 0.46, h - radius - 1.2));
+    if (i % 2 === 0) {
+      pushDisc(s, face, cy, 0.5, radius, voidTint, 0.18);
+      return;
+    }
+    const half = Math.min(0.18, (radius * 1.35) / face.len);
+    const top = outsetIndex(s, face, 0.5, cy + radius, voidTint, 0.18);
+    const left = outsetIndex(s, face, 0.5 - half, cy - radius * 0.75, voidTint, 0.18);
+    const right = outsetIndex(s, face, 0.5 + half, cy - radius * 0.75, voidTint, 0.18);
+    s.idx.push(top, left, right);
+  });
+  const count = s.idx.length / 3 - start;
+  if (count > 0) s.ranges.push({ start, count, label: `${label} opening` });
+  return count;
+}
+
+function addFrontBays(ring: number[], h: number, s: Surface, label: string, kind: "ahsan" | "curzon" | "museum"): number {
+  const face = facadesOf(ring).find((item) => item.len > 8);
+  if (!face || h < 6) return 0;
+  const start = s.idx.length / 3;
+  const dark: Tint = [0.12, 0.1, 0.09];
+  const white: Tint = [0.95, 0.92, 0.88];
+  if (kind === "museum") {
+    const bays = Math.min(9, Math.max(4, Math.floor(face.len / 6)));
+    for (let i = 0; i < bays; i++) {
+      const t = (i + 0.5) / bays;
+      pushOutsetQuad(s, face, t - 0.4 / face.len, t + 0.4 / face.len, 2.2, h - 2.4, dark, 0.12);
+    }
+    pushOutsetQuad(s, face, 0.08, 0.92, h - 1.6, h - 0.7, [0.2, 0.32, 0.5], 0.1);
+  } else {
+    const bays = Math.min(kind === "ahsan" ? 7 : 5, Math.max(3, Math.floor(face.len / (kind === "ahsan" ? 4.2 : 5.5))));
+    for (let i = 0; i <= bays; i++) {
+      const t = (i + 0.5) / (bays + 1);
+      const half = 0.22 / face.len;
+      pushOutsetQuad(s, face, t - half, t + half, 0.4, h - 1.1, kind === "ahsan" ? white : [0.72, 0.62, 0.5], 0.22);
+    }
+    for (let i = 0; i < bays; i++) {
+      const t0 = (i + 0.85) / (bays + 1);
+      const t1 = (i + 1.65) / (bays + 1);
+      const top = kind === "curzon" ? Math.min(h - 3.2, 7.2) : h * 0.62;
+      pushOutsetQuad(s, face, t0, t1, 2.4, top, dark, 0.1);
+      if (kind === "curzon") pushDisc(s, face, top, (t0 + t1) / 2, Math.min(1.3, ((t1 - t0) * face.len) / 2), dark, 0.1);
+    }
+    pushOutsetQuad(s, face, 0.04, 0.96, h - 1.15, h - 0.55, white, 0.12);
+  }
+  const count = s.idx.length / 3 - start;
+  if (count > 0) s.ranges.push({ start, count, label: `${label} opening` });
+  return count;
+}
+
 /** Landmark crown on the concrete roof mesh. A few boxes, not a second building. */
 function addHeroCrown(kind: HeroKind, ring: number[], h: number, s: Surface, label: string, span: number): void {
   const box = footprintSpan(ring);
@@ -870,13 +956,17 @@ function addHeroCrown(kind: HeroKind, ring: number[], h: number, s: Surface, lab
   if (!c || box.sx < 8 || box.sz < 8) return;
   const white: Tint = [0.95, 0.92, 0.88];
   const stone: Tint = [0.72, 0.7, 0.66];
-  if (kind === "sangsad" && span < 80) {
-    const hx = Math.min(6, box.sx * 0.22);
-    const hz = Math.min(6, box.sz * 0.22);
-    if (boxInside(c.x, c.z, hx, hz, ring)) upright(s, c.x, c.z, h, h + 2.4, hx, hz, stone);
+  if (kind === "sangsad") {
+    addSangsadFace(ring, h, s, label);
+    if (span < 80) {
+      const hx = Math.min(6, box.sx * 0.22);
+      const hz = Math.min(6, box.sz * 0.22);
+      if (boxInside(c.x, c.z, hx, hz, ring)) upright(s, c.x, c.z, h, h + 2.4, hx, hz, stone);
+    }
     return;
   }
   if (kind === "ahsan") {
+    addFrontBays(ring, h, s, label, "ahsan");
     const spots: [number, number, number][] = [
       [box.minX + 4, c.z, 7],
       [box.maxX - 4, c.z, 7],
@@ -891,6 +981,7 @@ function addHeroCrown(kind: HeroKind, ring: number[], h: number, s: Surface, lab
     return;
   }
   if (kind === "curzon") {
+    addFrontBays(ring, h, s, label, "curzon");
     if (boxInside(c.x, c.z, 2.6, 2.6, ring)) {
       upright(s, c.x, c.z, h, h + 4, 2.6, 2.6, white);
       upright(s, c.x, c.z, h + 4, h + 7.5, 1.3, 1.3, white);
@@ -901,7 +992,8 @@ function addHeroCrown(kind: HeroKind, ring: number[], h: number, s: Surface, lab
     return;
   }
   if (kind === "museum") {
-    upright(s, c.x, c.z, h, h + 2.2, Math.min(18, box.sx * 0.28), 2.2, [0.22, 0.32, 0.48]);
+    addFrontBays(ring, h, s, label, "museum");
+    if (boxInside(c.x, c.z, 2.2, 2.2, ring)) upright(s, c.x, c.z, h, h + 2.2, Math.min(18, box.sx * 0.28), 2.2, [0.22, 0.32, 0.48]);
   }
 }
 
